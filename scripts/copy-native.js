@@ -1,4 +1,4 @@
-import { copyFile, mkdir } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,4 +26,15 @@ const sourceName = process.platform === "win32"
 
 const nativeDirectory = join(root, "native");
 await mkdir(nativeDirectory, { recursive: true });
-await copyFile(join(root, "target", "release", sourceName), join(nativeDirectory, outputName()));
+const destination = join(nativeDirectory, outputName());
+// Never truncate a library that another Node process may have memory-mapped.
+// Stage on the same filesystem, then replace the directory entry atomically.
+// Existing processes retain the old inode; new processes load the new binary.
+const stagingDirectory = await mkdtemp(join(nativeDirectory, ".qr-build-"));
+try {
+  const staged = join(stagingDirectory, "addon.node");
+  await copyFile(join(root, "target", "release", sourceName), staged);
+  await rename(staged, destination);
+} finally {
+  await rm(stagingDirectory, { recursive: true, force: true });
+}

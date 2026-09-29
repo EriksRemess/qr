@@ -1,6 +1,6 @@
 //! Parsing and preparation of trusted, reusable logo assets.
 //!
-//! SVG logos remain vector fragments for SVG output. PNG logos are decoded once
+//! SVG logos remain isolated vector images for SVG output. PNG logos are decoded once
 //! in the renderer constructor and retained as RGBA pixels. The PNG decoder is
 //! intentionally limited to the static logo format needed by this package; it
 //! is not a general replacement for an image library.
@@ -13,61 +13,14 @@ const MAX_LOGO_DIMENSION: usize = 4096;
 const MAX_LOGO_COMPRESSED_BYTES: usize = 16 * 1024 * 1024;
 const MAX_LOGO_DECOMPRESSED_BYTES: usize = 64 * 1024 * 1024;
 
-#[derive(Clone, Debug)]
-pub struct SvgLogo {
-    pub body: String,
-    pub view_x: f64,
-    pub view_y: f64,
-    pub width: f64,
-    pub height: f64,
-}
+mod svg;
+pub use svg::SvgLogo;
 
 #[derive(Clone, Debug)]
 pub struct PngLogo {
     pub width: usize,
     pub height: usize,
     pub rgba: Vec<u8>,
-}
-
-impl SvgLogo {
-    /// Extract an SVG root's view box and body.
-    ///
-    /// Logo SVG is trusted application configuration, not user input. The
-    /// parser still rejects malformed roots and non-finite geometry so invalid
-    /// assets fail during renderer construction instead of corrupting output.
-    pub fn parse(input: &str) -> Result<Self, RenderError> {
-        let root_start = input.find("<svg").ok_or(RenderError::InvalidSvgLogo)?;
-        let root_end = input[root_start..]
-            .find('>')
-            .map(|index| root_start + index)
-            .ok_or(RenderError::InvalidSvgLogo)?;
-        let close = input.rfind("</svg>").ok_or(RenderError::InvalidSvgLogo)?;
-        if close <= root_end {
-            return Err(RenderError::InvalidSvgLogo);
-        }
-        let attributes = &input[root_start + 4..root_end];
-        let view_box = attribute(attributes, "viewBox").ok_or(RenderError::InvalidSvgLogo)?;
-        let values = view_box
-            .split(|character: char| character.is_ascii_whitespace() || character == ',')
-            .filter(|part| !part.is_empty())
-            .map(str::parse::<f64>)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| RenderError::InvalidSvgLogo)?;
-        if values.len() != 4
-            || values.iter().any(|value| !value.is_finite())
-            || values[2] <= 0.0
-            || values[3] <= 0.0
-        {
-            return Err(RenderError::InvalidSvgLogo);
-        }
-        Ok(Self {
-            body: input[root_end + 1..close].trim().to_owned(),
-            view_x: values[0],
-            view_y: values[1],
-            width: values[2],
-            height: values[3],
-        })
-    }
 }
 
 impl PngLogo {
@@ -81,6 +34,10 @@ impl PngLogo {
         let mut header = None;
         let mut compressed = Vec::new();
         let mut saw_end = false;
+        let mut saw_data = false;
+        let mut data_ended = false;
+        let mut saw_palette = false;
+        let mut transparent_rgb = None;
         while offset < input.len() {
             if input.len() - offset < 12 {
                 return Err(RenderError::InvalidPngLogo("truncated PNG chunk"));
@@ -97,11 +54,22 @@ impl PngLogo {
                 return Err(RenderError::InvalidPngLogo("truncated PNG chunk"));
             }
             let chunk_type: &[u8; 4] = input[offset + 4..offset + 8].try_into().unwrap();
+            if !chunk_type.iter().all(u8::is_ascii_alphabetic)
+                || !chunk_type[2].is_ascii_uppercase()
+            {
+                return Err(RenderError::InvalidPngLogo("invalid PNG chunk type"));
+            }
             let expected_crc = u32::from_be_bytes(input[data_end..chunk_end].try_into().unwrap());
             if crc32(0, &input[offset + 4..data_end]) != expected_crc {
                 return Err(RenderError::InvalidPngLogo("PNG chunk checksum mismatch"));
             }
 
+            if header.is_none() && chunk_type != b"IHDR" {
+                return Err(RenderError::InvalidPngLogo("IHDR must be the first chunk"));
+            }
+            if saw_data && chunk_type != b"IDAT" {
+                data_ended = true;
+            }
             match chunk_type {
                 b"IHDR" => {
                     if header.is_some() || length != 13 {
@@ -135,17 +103,57 @@ impl PngLogo {
                     header = Some((width, height, color_type));
                 }
                 b"IDAT" => {
+                    if data_ended {
+                        return Err(RenderError::InvalidPngLogo(
+                            "IDAT chunks must be consecutive",
+                        ));
+                    }
+                    saw_data = true;
                     if compressed.len() + length > MAX_LOGO_COMPRESSED_BYTES {
                         return Err(RenderError::InvalidPngLogo("compressed logo is too large"));
                     }
                     compressed.extend_from_slice(&input[data_start..data_end]);
                 }
                 b"IEND" => {
-                    if length != 0 {
+                    if length != 0 || !saw_data || chunk_end != input.len() {
                         return Err(RenderError::InvalidPngLogo("invalid IEND chunk"));
                     }
                     saw_end = true;
                     break;
+                }
+                b"PLTE" => {
+                    if saw_palette
+                        || saw_data
+                        || transparent_rgb.is_some()
+                        || length == 0
+                        || length > 768
+                        || !length.is_multiple_of(3)
+                    {
+                        return Err(RenderError::InvalidPngLogo("invalid PLTE chunk"));
+                    }
+                    saw_palette = true;
+                }
+                b"tRNS" => {
+                    if saw_data
+                        || transparent_rgb.is_some()
+                        || length != 6
+                        || header.is_none_or(|(_, _, color_type)| color_type != 2)
+                    {
+                        return Err(RenderError::InvalidPngLogo("invalid tRNS chunk"));
+                    }
+                    let mut key = [0_u8; 3];
+                    for (channel, value) in key.iter_mut().enumerate() {
+                        if input[data_start + channel * 2] != 0 {
+                            return Err(RenderError::InvalidPngLogo(
+                                "tRNS sample exceeds 8-bit depth",
+                            ));
+                        }
+                        *value = input[data_start + channel * 2 + 1];
+                    }
+                    transparent_rgb = Some(key);
+                }
+                _ if chunk_type[0].is_ascii_uppercase() => {
+                    return Err(RenderError::InvalidPngLogo("unknown critical PNG chunk"));
                 }
                 _ => {}
             }
@@ -213,7 +221,12 @@ impl PngLogo {
         } else {
             let mut rgba = Vec::with_capacity(width * height * 4);
             for pixel in raw.as_chunks::<3>().0 {
-                rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+                let alpha = if transparent_rgb.as_ref() == Some(pixel) {
+                    0
+                } else {
+                    255
+                };
+                rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], alpha]);
             }
             rgba
         };
@@ -225,17 +238,39 @@ impl PngLogo {
     }
 }
 
-fn attribute<'a>(attributes: &'a str, name: &str) -> Option<&'a str> {
-    let start = attributes.find(name)? + name.len();
-    let rest = attributes[start..].trim_start();
-    let rest = rest.strip_prefix('=')?.trim_start();
-    let quote = rest.as_bytes().first().copied()?;
-    if quote != b'\'' && quote != b'"' {
-        return None;
+/// Return exact attribute names, values and source spans without matching names
+/// inside another attribute (e.g. data-viewBox or a style value).
+fn attributes(mut input: &str) -> Result<Vec<(&str, &str, &str)>, RenderError> {
+    let mut result = Vec::new();
+    while !input.trim().is_empty() {
+        input = input.trim_start();
+        let start = input;
+        let name_end = input
+            .find(|ch: char| ch.is_ascii_whitespace() || ch == '=')
+            .ok_or(RenderError::InvalidSvgLogo)?;
+        let name = &input[..name_end];
+        if name.is_empty() || result.iter().any(|(existing, _, _)| *existing == name) {
+            return Err(RenderError::InvalidSvgLogo);
+        }
+        input = input[name_end..]
+            .trim_start()
+            .strip_prefix('=')
+            .ok_or(RenderError::InvalidSvgLogo)?
+            .trim_start();
+        let quote = input.chars().next().ok_or(RenderError::InvalidSvgLogo)?;
+        if !matches!(quote, '\'' | '"') {
+            return Err(RenderError::InvalidSvgLogo);
+        }
+        input = &input[1..];
+        let end = input.find(quote).ok_or(RenderError::InvalidSvgLogo)?;
+        let value = &input[..end];
+        input = &input[end + 1..];
+        if !input.is_empty() && !input.starts_with(char::is_whitespace) {
+            return Err(RenderError::InvalidSvgLogo);
+        }
+        result.push((name, value, &start[..start.len() - input.len()]));
     }
-    let value = &rest[1..];
-    let end = value.find(quote as char)?;
-    Some(&value[..end])
+    Ok(result)
 }
 
 fn paeth(left: u8, up: u8, upper_left: u8) -> u8 {
@@ -265,10 +300,11 @@ mod tests {
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="8 16 234 117"><path d="M0 0"/></svg>"#,
         )
         .unwrap();
-        assert_eq!(
-            (logo.view_x, logo.view_y, logo.width, logo.height),
-            (8.0, 16.0, 234.0, 117.0)
+        assert_eq!((logo.width, logo.height), (234.0, 117.0));
+        assert!(logo.image_uri.starts_with("data:image/svg+xml,"));
+        assert!(
+            logo.image_uri
+                .contains("viewBox%3D%228%2016%20234%20117%22")
         );
-        assert_eq!(logo.body, r#"<path d="M0 0"/>"#);
     }
 }

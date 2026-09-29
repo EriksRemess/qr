@@ -39,28 +39,25 @@ function run({ iterations, name, render }) {
 }
 
 const rows = [];
-for (const moduleShape of ["square", "dot"]) {
-  const renderer = new QrRenderer({
-    errorCorrection: "high",
-    foreground: "#172554",
-    moduleShape,
-  });
-  for (const bytes of [32, 256, 1_024]) {
-    const text = payload(bytes);
-    rows.push(run({
-      iterations: svgIterations,
-      name: `SVG ${moduleShape} ${bytes}B 512px`,
-      render: () => renderer.svg(text, { size: 512 }),
-    }));
-  }
-  for (const size of [256, 512, 1_024]) {
-    const text = payload(32);
-    rows.push(run({
-      iterations: pngIterations,
-      name: `PNG ${moduleShape} 32B ${size}px`,
-      render: () => renderer.png(text, { size }),
-    }));
-  }
+const renderer = new QrRenderer({
+  errorCorrection: "high",
+  foreground: "#172554",
+});
+for (const bytes of [32, 256, 1_024]) {
+  const text = payload(bytes);
+  rows.push(run({
+    iterations: svgIterations,
+    name: `SVG square ${bytes}B 512px`,
+    render: () => renderer.svg(text, { size: 512 }),
+  }));
+}
+for (const size of [256, 512, 1_024]) {
+  const text = payload(32);
+  rows.push(run({
+    iterations: pngIterations,
+    name: `PNG square 32B ${size}px`,
+    render: () => renderer.png(text, { size }),
+  }));
 }
 
 const nameWidth = Math.max(...rows.map(({ name }) => name.length));

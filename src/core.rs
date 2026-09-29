@@ -44,14 +44,10 @@ impl fmt::Display for EncodeError {
 impl std::error::Error for EncodeError {}
 
 /// The encoded square module grid.
-///
-/// `function` is retained after construction so renderers can preserve finder,
-/// timing, alignment, and metadata modules when applying decorative styles.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Symbol {
     pub size: usize,
     pub modules: Vec<bool>,
-    pub function: Vec<bool>,
     pub version: u8,
     pub mask: u8,
 }
@@ -60,11 +56,6 @@ impl Symbol {
     #[inline]
     pub fn module(&self, x: usize, y: usize) -> bool {
         self.modules[y * self.size + x]
-    }
-
-    #[inline]
-    pub fn is_function(&self, x: usize, y: usize) -> bool {
-        self.function[y * self.size + x]
     }
 }
 
@@ -475,7 +466,6 @@ fn build_symbol(codewords: &[u8], version: u8, level: EcLevel) -> Symbol {
     Symbol {
         size: matrix.size,
         modules: matrix.modules,
-        function: matrix.function,
         version,
         mask: best_mask,
     }

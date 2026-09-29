@@ -29,6 +29,13 @@ this on an x86-64 glibc host compatible with the deployment environment. On an
 Apple Silicon development machine, the same command creates the Darwin ARM64
 artifact.
 
+The copy is staged in a unique temporary directory beside the destination and
+installed with an atomic rename. Rebuilding never truncates an addon that a
+running Node process has memory-mapped. Existing processes keep their loaded
+binary and must restart to use the new build; new processes see the replacement.
+A failed copy leaves the previous artifact intact, and temporary staging files
+are cleaned up on success or failure. This applies to both supported hosts.
+
 Cross-compilation is deliberately not hidden in the first implementation. It
 adds linker/SDK complexity and provides less confidence than running tests on
 the target operating system.

@@ -12,14 +12,13 @@ use assets::{PngLogo, SvgLogo};
 use core::{EcLevel, encode_text};
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
-use render::{Color, DEFAULT_SIZE, ModuleShape, Style, render_png, render_svg, validate_size};
+use render::{Color, DEFAULT_SIZE, Style, render_png, render_svg, validate_size};
 
 #[napi(object)]
 pub struct RendererOptions {
     pub background: Option<String>,
     pub foreground: Option<String>,
     pub margin: Option<f64>,
-    pub module_shape: Option<String>,
     pub error_correction: Option<String>,
     pub logo_svg: Option<String>,
     pub logo_png: Option<Buffer>,
@@ -50,7 +49,6 @@ impl QrRenderer {
             background: None,
             foreground: None,
             margin: None,
-            module_shape: None,
             error_correction: None,
             logo_svg: None,
             logo_png: None,
@@ -75,13 +73,6 @@ impl QrRenderer {
                 ));
             }
             style.margin = value as u32;
-        }
-        if let Some(value) = options.module_shape {
-            style.shape = match value.as_str() {
-                "square" => ModuleShape::Square,
-                "dot" => ModuleShape::Dot,
-                _ => return Err(napi_error("moduleShape must be \"square\" or \"dot\"")),
-            };
         }
         if let Some(value) = options.error_correction {
             style.error_correction = match value.as_str() {
@@ -122,12 +113,16 @@ impl QrRenderer {
             }
             style.svg_logo_outline_width = value;
         }
-        let svg_logo = options
+        let mut svg_logo = options
             .logo_svg
             .as_deref()
             .map(SvgLogo::parse)
             .transpose()
             .map_err(napi_error)?;
+        if let (Some(logo), Some(color)) = (&mut svg_logo, style.svg_logo_outline) {
+            logo.set_outline(color, style.svg_logo_outline_width)
+                .map_err(napi_error)?;
+        }
         let png_logo = options
             .logo_png
             .as_deref()

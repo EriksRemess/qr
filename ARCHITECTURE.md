@@ -33,12 +33,11 @@ into the in-memory raster before the single PNG compression pass.
 `Symbol`, containing:
 
 - the final dark/light module grid;
-- a parallel function-module map;
 - the selected version and mask.
 
-The function map is not incidental metadata. Renderers use it to prevent style
-choices such as circular modules from changing finder, timing, alignment,
-format, or version patterns.
+An internal function-module map protects finder, timing, alignment, format, and
+version patterns during data placement and masking. It is discarded after
+encoding; renderers only need the final module grid.
 
 The initial encoder always uses byte mode, which works for arbitrary UTF-8
 payloads. Numeric and alphanumeric segmentation are future size optimizations
@@ -71,12 +70,65 @@ The selected mask and corresponding format bits are stored in the final symbol.
 ## SVG renderer
 
 Square dark modules are coalesced into horizontal path runs. This avoids one SVG
-element per module and keeps output deterministic. Dot mode emits circles as
-subpaths for data modules while fixed QR patterns remain in the square path.
+element per module and keeps output deterministic. Square modules are the only
+supported shape.
 
 SVG strings contain no payload text and therefore do not interpolate untrusted
 input into markup. Numeric dimensions and colors are parsed and validated before
 rendering.
+
+SVG logos retain their own viewport and presentation attributes. A small scanner
+checks tag nesting and skips comments, processing instructions and CDATA, rather
+than searching for the first literal `<svg`. It deliberately rejects DTDs; it is
+not a general XML validator or sanitizer. ViewBox dimensions are bounded to
+`1e-9..=1e12` and origin magnitudes to `1e12`, avoiding degenerate transforms.
+Transform numbers use round-tripping decimal precision.
+The normalized root viewport also has final inline `!important` geometry styles;
+source CSS cannot override its dimensions or placement. XML attribute references
+are decoded before parsing viewBox geometry or matching IDs, and edited values
+are XML-escaped again during serialization (including referenced whitespace).
+All decoded inline styles are checked for complete lexical boundaries before
+compilation: unterminated comments/strings, dangling escapes, and unbalanced
+blocks are rejected. Otherwise CSS EOF recovery could consume appended viewport
+or stroke-only declarations, causing incorrect sizing or double-painted fills.
+Quoted strings and unquoted URL tokens retain literal comment-looking text.
+This is a boundary check, not a general CSS grammar/property validator.
+
+Shape-only logos stay inline. Their definition IDs and URL references are
+namespaced independently for normal and outline copies. Prefixes use a stable
+FNV-1a-128 fingerprint of the compiled document, so different logos or outline
+styles embedded in one parent document do not resolve each other's definitions.
+Outline IDs also include the rendered stroke width: definitions containing
+non-scaling strokes differ between output sizes. Identical documents may share
+identical definitions; output stays deterministic without counters or randomness.
+The fingerprint is an identifier, not a security boundary. CSS URL references
+are decoded for hexadecimal/simple escapes before matching IDs, then emitted as
+quoted, CSS-escaped strings. URL-looking text in strings/comments is left alone.
+Whitespace and comments after a quoted URL argument are consumed as CSS syntax;
+comment-looking text inside strings or unquoted URLs remains literal.
+Logos with stylesheets use isolated, percent-encoded SVG image subdocuments; CSS selectors cannot reach
+QR paths. Those image URIs are compiled once, without an added dependency.
+Their image dimensions use output pixels rather than QR modules to avoid tiny
+intermediate image surfaces in librsvg. Some consumers still cache these
+subdocuments at nominal resolution when zooming, so callers should select the
+intended output size. Inline logos do not have that limitation.
+
+Outlines use a separately compiled vector copy with inline `!important`
+stroke-only styling on drawable nodes. Clipping, masking and paint definitions
+retain their fills. An explicit pass flag, rather than nonzero padding, selects
+the outline: subnormal widths can underflow to zero padding. The original logo
+is not repainted in the outline pass;
+bitmap/foreignObject content is excluded. An expanded viewport prevents strokes
+at the source viewBox edges from being clipped.
+Outline nodes use `vector-effect: non-scaling-stroke`, so internal transforms do
+not distort thickness. The compiled outline has a collision-checked width slot;
+rendering substitutes the configured logo-unit width times the fitted pixel
+scale. The normal logo remains borrowed without an extra copy. This keeps SVG
+transform handling in the viewer instead of introducing a second geometry engine.
+
+SVG and PNG share `LogoLayout`: integer logo bounds, centered placement, and a
+square backing whose padding is rounded up to pixels. This keeps backing shape
+and coverage identical across both formats.
 
 ## PNG renderer
 
@@ -95,6 +147,13 @@ chunk construction and filtering are local code. Sub filtering and RLE-oriented
 compression are current performance choices and remain benchmark-controlled.
 PNG logos are resized with bilinear interpolation in premultiplied-alpha space,
 which preserves smooth transparent edges without introducing color fringes.
+Foreground-over-background colors are composited once per render with the same
+source-over semantics as SVG, then reused for every module pixel.
+
+The logo decoder accepts 8-bit RGB/RGBA images, including RGB `tRNS` color keys.
+It validates chunk checksums and ordering, rejects unknown critical chunks,
+and requires consecutive IDAT chunks and a final IEND. Suggested RGB palettes
+and unknown ancillary chunks are accepted without affecting pixel decoding.
 
 ## Native boundary
 

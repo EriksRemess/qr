@@ -1,4 +1,4 @@
-use super::{ModuleShape, RenderError, Style, is_dark_at, symbol_coordinate, validate_size};
+use super::{LogoLayout, RenderError, Style, is_dark_at, symbol_coordinate, validate_size};
 use crate::assets::PngLogo;
 use crate::core::Symbol;
 use zlib_rs::{DeflateConfig, ReturnCode, Strategy, compress_bound, compress_slice, crc32::crc32};
@@ -40,14 +40,17 @@ pub fn render_png(
     let mut filtered = vec![0_u8; scanline_bytes];
     let logo = logo.map(|logo| LogoPlacement::new(logo, style, size, total_modules));
     let mut square_row_cache: Vec<Option<Vec<u8>>> = vec![None; total_modules];
+    // Match SVG's foreground-over-background compositing, once per render
+    // rather than once per pixel.
+    let background = Pixel::from_color(style.background);
+    let foreground = Pixel::from_color(style.foreground).over(background);
 
     for y in 0..size {
         let row_start = y * (row_bytes + 1);
         let module_y = symbol_coordinate(y, size, total_modules);
-        let cacheable = style.shape == ModuleShape::Square
-            && logo
-                .as_ref()
-                .is_none_or(|placement| y < placement.backing_y || y >= placement.backing_bottom);
+        let cacheable = logo
+            .as_ref()
+            .is_none_or(|placement| y < placement.backing_y || y >= placement.backing_bottom);
         if cacheable && let Some(cached) = &square_row_cache[module_y] {
             filtered[row_start..row_start + row_bytes + 1].copy_from_slice(cached);
             continue;
@@ -61,9 +64,8 @@ pub fn render_png(
                 symbol,
                 style,
                 (x, y),
-                size,
-                total_modules,
                 (module_x, module_y),
+                (foreground, background),
                 logo.as_ref(),
             );
             let rgba = [color.red, color.green, color.blue, color.alpha];
@@ -183,23 +185,24 @@ struct AxisSample {
 
 impl<'a> LogoPlacement<'a> {
     fn new(logo: &'a PngLogo, style: &Style, size: usize, total_modules: usize) -> Self {
-        let target = size as f64 * style.logo_scale;
-        let scale = (target / logo.width as f64).min(target / logo.height as f64);
-        let width = (logo.width as f64 * scale).round().max(1.0) as usize;
-        let height = (logo.height as f64 * scale).round().max(1.0) as usize;
-        let x = (size - width) / 2;
-        let y = (size - height) / 2;
-        let padding = (style.logo_padding * size as f64 / total_modules as f64).ceil() as usize;
+        let layout = LogoLayout::new(
+            logo.width as f64,
+            logo.height as f64,
+            style,
+            size,
+            total_modules,
+        );
+        let (x, y, width, height) = (layout.x, layout.y, layout.width, layout.height);
         Self {
             logo,
             x,
             y,
             width,
             height,
-            backing_x: x.saturating_sub(padding),
-            backing_y: y.saturating_sub(padding),
-            backing_right: (x + width + padding).min(size),
-            backing_bottom: (y + height + padding).min(size),
+            backing_x: layout.left,
+            backing_y: layout.top,
+            backing_right: layout.right,
+            backing_bottom: layout.bottom,
             background: Pixel::from_color(style.logo_background),
             x_samples: sampling_axis(logo.width, width),
             y_samples: sampling_axis(logo.height, height),
@@ -289,41 +292,17 @@ fn pixel_color(
     symbol: &Symbol,
     style: &Style,
     pixel: (usize, usize),
-    output_size: usize,
-    total_modules: usize,
     module: (usize, usize),
+    colors: (Pixel, Pixel),
     logo: Option<&LogoPlacement<'_>>,
 ) -> Pixel {
     let (pixel_x, pixel_y) = pixel;
     let (module_x, module_y) = module;
-    let mut dark = is_dark_at(symbol, style, module_x, module_y);
-    if dark && style.shape == ModuleShape::Dot {
-        let margin = style.margin as usize;
-        let symbol_x = module_x.saturating_sub(margin);
-        let symbol_y = module_y.saturating_sub(margin);
-        if symbol_x < symbol.size
-            && symbol_y < symbol.size
-            && !symbol.is_function(symbol_x, symbol_y)
-        {
-            // Pixel-center coverage. A later antialiasing pass can refine edge
-            // coverage without changing symbol construction.
-            let local_x = ((pixel_x * total_modules * 2 + total_modules) % (output_size * 2))
-                as f64
-                / (output_size * 2) as f64;
-            let local_y = ((pixel_y * total_modules * 2 + total_modules) % (output_size * 2))
-                as f64
-                / (output_size * 2) as f64;
-            let dx = local_x - 0.5;
-            let dy = local_y - 0.5;
-            dark = dx * dx + dy * dy <= 0.25;
-        }
-    }
-    let color = if dark {
-        style.foreground
+    let pixel = if is_dark_at(symbol, style, module_x, module_y) {
+        colors.0
     } else {
-        style.background
+        colors.1
     };
-    let pixel = Pixel::from_color(color);
     logo.map_or(pixel, |placement| {
         placement.composite(pixel_x, pixel_y, pixel)
     })

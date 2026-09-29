@@ -82,7 +82,6 @@ const renderer = new QrRenderer({
   logoScale: 0.22,
   logoSvg,
   margin: 2,
-  moduleShape: "square",
 });
 
 await mkdir(outputDirectory, { recursive: true });

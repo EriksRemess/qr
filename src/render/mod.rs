@@ -12,6 +12,40 @@ pub use svg::render_svg;
 pub const DEFAULT_SIZE: u32 = 512;
 pub const MAX_SIZE: u32 = 4096;
 
+/// Shared pixel layout for both formats. SVG keeps vector logo geometry but
+/// places it on the same output-pixel bounds as the raster compositor.
+pub(crate) struct LogoLayout {
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
+    pub left: usize,
+    pub top: usize,
+    pub right: usize,
+    pub bottom: usize,
+}
+
+impl LogoLayout {
+    pub fn new(width: f64, height: f64, style: &Style, size: usize, modules: usize) -> Self {
+        let scale = size as f64 * style.logo_scale / width.max(height);
+        let width = (width * scale).round().max(1.0) as usize;
+        let height = (height * scale).round().max(1.0) as usize;
+        let x = (size - width) / 2;
+        let y = (size - height) / 2;
+        let padding = (style.logo_padding * size as f64 / modules as f64).ceil() as usize;
+        Self {
+            x,
+            y,
+            width,
+            height,
+            left: x.saturating_sub(padding),
+            top: y.saturating_sub(padding),
+            right: (x + width + padding).min(size),
+            bottom: (y + height + padding).min(size),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Color {
     pub red: u8,
@@ -36,6 +70,11 @@ impl Color {
 
     pub fn parse(input: &str) -> Result<Self, RenderError> {
         let raw = input.strip_prefix('#').unwrap_or(input);
+        // Check bytes before slicing: invalid UTF-8 boundaries must never
+        // panic across the native Node boundary.
+        if !raw.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(RenderError::InvalidColor(input.to_owned()));
+        }
         let expanded;
         let value = match raw.len() {
             3 | 4 => {
@@ -70,18 +109,9 @@ impl Color {
             None
         } else {
             let opacity = f64::from(self.alpha) / 255.0;
-            Some(format!("{opacity:.3}"))
+            Some(opacity.to_string())
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum ModuleShape {
-    #[default]
-    Square,
-    /// Circular data modules. Functional patterns remain square for reliable
-    /// acquisition and alignment.
-    Dot,
 }
 
 #[derive(Clone, Debug)]
@@ -89,7 +119,6 @@ pub struct Style {
     pub foreground: Color,
     pub background: Color,
     pub margin: u32,
-    pub shape: ModuleShape,
     pub error_correction: EcLevel,
     /// Maximum logo width/height as a fraction of the complete QR image.
     pub logo_scale: f64,
@@ -108,7 +137,6 @@ impl Default for Style {
             foreground: Color::BLACK,
             background: Color::WHITE,
             margin: 4,
-            shape: ModuleShape::Square,
             error_correction: EcLevel::Medium,
             logo_scale: 1.0 / 3.0,
             logo_padding: 0.35,

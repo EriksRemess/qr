@@ -20,7 +20,7 @@ npm run bench
 
 - Payloads: 32, 256, and 1024 UTF-8 bytes for SVG
 - PNG dimensions: 256, 512, and 1024 pixels
-- Module shapes: square and dot
+- Module shape: square
 - Error correction: H
 - Reported values: operations/second, milliseconds/operation, output bytes
 
@@ -69,7 +69,7 @@ unmeasured complexity.
 Square-module rasterization caches filtered rows by QR module row. At 1024px,
 one module spans many identical pixel rows; regenerating those rows dominated
 the initial native implementation. The cache is bypassed for rows intersecting
-a PNG logo and for dot styling, where submodule pixel position changes coverage.
+a PNG logo, where submodule pixel position changes coverage.
 
 After the full-matrix differential tests were added, a Linux x86-64/Node 26.7.0
 run measured the following public-API loop averages on 2026-09-29:
@@ -78,7 +78,39 @@ run measured the following public-API loop averages on 2026-09-29:
 | --- | ---: | ---: | ---: |
 | SVG square, 32 B, 512px | 7,983.8 | 0.1253 | 4,027 |
 | PNG square, 32 B, 1024px | 722.1 | 1.3849 | 50,343 |
-| PNG dot, 32 B, 1024px | 152.4 | 6.5607 | 73,485 |
 
 These figures are development snapshots, not durable release claims. Rerun the
 suite after toolchain, encoder, renderer, or compression changes.
+
+## Square-only regression run (2026-09-29)
+
+After removing alternate module shapes and fixing alpha compositing and logo
+parsing, the default benchmark measured the following on an AMD Ryzen 9 5950X,
+Linux x86-64/glibc 2.43, Node 26.10.0, and Rust 1.98.1. This used the standard
+release profile (thin LTO, one codegen unit), H correction, no logo, and Sub/RLE
+PNG compression. Each case had 50 warmups, then 2,000 SVG or 200 PNG iterations.
+All 13 Rust and 12 Node tests passed, including independent SVG rasterization
+and QR decoding checks. These are local loop averages, not server throughput.
+
+| Case | Operations/second | Milliseconds/operation | Output bytes |
+| --- | ---: | ---: | ---: |
+| SVG square, 32 B, 512px | 8,234.9 | 0.1214 | 4,027 |
+| SVG square, 256 B, 512px | 938.3 | 1.0657 | 25,689 |
+| SVG square, 1024 B, 512px | 263.7 | 3.7924 | 98,078 |
+| PNG square, 32 B, 256px | 2,789.9 | 0.3584 | 11,026 |
+| PNG square, 32 B, 512px | 1,806.5 | 0.5535 | 22,907 |
+| PNG square, 32 B, 1024px | 737.3 | 1.3562 | 50,343 |
+
+After the SVG-logo isolation/outline fixes and shared backing layout, the same
+machine and default benchmark settings measured 0.1207 ms for the 32-byte SVG
+case and 1.3959 ms for the 1024px PNG case. Output byte counts were unchanged.
+These unbranded cases do not measure logo compilation or SVG viewer rendering;
+logo parsing, ID rewriting and isolated-image URI creation happen once in the
+renderer constructor, not on each render call.
+
+A follow-up run after viewport-CSS normalization, transform-independent outline
+widths and XML-reference decoding measured 0.1287 ms for the 32-byte SVG case
+and 1.3713 ms for 1024px PNG on the same host/settings. The 17 Rust and 21 Node
+tests passed, including transformed-outline and viewport/reference raster checks.
+These unbranded timings do not measure the small per-render substitution of the
+outlined logo's output-pixel stroke width.

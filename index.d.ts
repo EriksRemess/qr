@@ -1,24 +1,21 @@
 export type ErrorCorrection = "low" | "medium" | "quartile" | "high";
-export type ModuleShape = "square" | "dot";
 
 export interface RendererOptions {
   /** Background color as #RGB, #RGBA, #RRGGBB, or #RRGGBBAA. */
   background?: string;
-  /** Foreground color as #RGB, #RGBA, #RRGGBB, or #RRGGBBAA. */
+  /** Hex foreground color, composited over background using source-over alpha. */
   foreground?: string;
   /** Number of light modules surrounding the QR symbol. Defaults to 4. */
   margin?: number;
-  /** Styling for data modules. Functional patterns always remain square. */
-  moduleShape?: ModuleShape;
   /** Error-correction strength. Defaults to medium. */
   errorCorrection?: ErrorCorrection;
-  /** Trusted standalone SVG used only for SVG output. */
+  /** Trusted self-contained SVG with a numeric viewBox; stylesheets are isolated. */
   logoSvg?: string;
-  /** Non-interlaced 8-bit RGB/RGBA PNG used only for PNG output. */
+  /** Non-interlaced 8-bit RGB/RGBA PNG (RGB tRNS supported), for PNG output only. */
   logoPng?: Buffer;
   /** Maximum logo width/height as a fraction of output size. Defaults to 1/3. */
   logoScale?: number;
-  /** Logo backing padding measured in QR modules. Defaults to 0.35. */
+  /** Square backing padding in QR modules, rounded up to pixels. Defaults to 0.35. */
   logoPadding?: number;
   /** Logo backing color; defaults to the QR background. */
   logoBackground?: string;
