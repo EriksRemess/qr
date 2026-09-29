@@ -1,0 +1,107 @@
+name: Publish GitHub package
+
+on:
+  release:
+    types: [released]
+  workflow_dispatch:
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-native:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64-gnu
+            os: ubuntu-24.04
+            artifact: qr-native-linux-x64-gnu.node
+            expected-node-platform: linux
+            expected-node-arch: x64
+          - platform: darwin-arm64
+            os: macos-15
+            artifact: qr-native-darwin-arm64.node
+            expected-node-platform: darwin
+            expected-node-arch: arm64
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js 26
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 26
+          package-manager-cache: false
+
+      - name: Set up stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy --no-self-update
+          rustup override set stable
+
+      - name: Verify runner architecture
+        env:
+          EXPECTED_ARCH: ${{ matrix.expected-node-arch }}
+          EXPECTED_PLATFORM: ${{ matrix.expected-node-platform }}
+        run: node --input-type=module --eval 'if (process.arch !== process.env.EXPECTED_ARCH || process.platform !== process.env.EXPECTED_PLATFORM) throw new Error(`Expected ${process.env.EXPECTED_PLATFORM}-${process.env.EXPECTED_ARCH}, received ${process.platform}-${process.arch}`)'
+
+      - name: Install development dependencies
+        run: npm ci
+
+      - name: Check formatting and lints
+        run: npm run check
+
+      - name: Build and test native package
+        run: npm test
+
+      - name: Upload native artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-${{ matrix.platform }}
+          path: native/${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish to GitHub Packages
+    needs: build-native
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js 26 and GitHub Packages
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 26
+          package-manager-cache: false
+          registry-url: https://npm.pkg.github.com
+          scope: "@eriksremess"
+
+      - name: Download native artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: native-*
+          path: native
+          merge-multiple: true
+
+      - name: Verify release and package contents
+        run: |
+          node scripts/check-release.js
+          npm pack --dry-run
+
+      - name: Publish package
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

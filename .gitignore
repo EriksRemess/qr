@@ -1,0 +1,9 @@
+/node_modules/
+/target/
+/native/*.node
+/example/output/
+/example/assets/
+/example/private/
+/MIGRATION.md
+/PRIVATE-BENCHMARKS.md
+*.log

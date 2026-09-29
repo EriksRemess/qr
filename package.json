@@ -1,0 +1,41 @@
+{
+  "name": "@eriksremess/qr",
+  "version": "0.1.0",
+  "description": "Fast, customizable QR rendering for modern Node.js",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EriksRemess/qr.git"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://npm.pkg.github.com"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "native/*.node"
+  ],
+  "scripts": {
+    "build:native": "cargo build --locked --release && node scripts/copy-native.js",
+    "check": "cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings",
+    "test:rust": "cargo test --locked",
+    "test:node": "node --test test/*.test.js",
+    "test": "npm run build:native && npm run test:rust && npm run test:node",
+    "bench": "npm run build:native && node benchmark/render.js",
+    "example": "npm run build:native && node example/generate.js"
+  },
+  "engines": {
+    "node": ">=26"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "jsqr": "1.4.0"
+  }
+}
