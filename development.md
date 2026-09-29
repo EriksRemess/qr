@@ -1,13 +1,7 @@
 # Development
 
-## Requirements
-
-- Node.js 26 or newer
-- Rust 1.88 or newer and a native linker
-- Linux x86-64 with glibc or Apple Silicon macOS
-- Optional: `rsvg-convert` for SVG rasterization tests
-
-## Build and test
+Requires Node.js 26+, Rust 1.88+, and a native linker on a
+[supported platform](./NATIVE-BUILDS.md).
 
 ```sh
 npm install
@@ -15,41 +9,37 @@ npm run check
 npm test
 ```
 
-`npm test` builds the native addon, then runs the Rust and Node.js tests.
-`npm run check` checks Rust formatting and Clippy warnings. To build separately:
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `npm run build:native` | Build and copy the release addon |
+| `npm run check` | Check Rust formatting and Clippy warnings |
+| `npm test` | Build the addon and run Rust/Node tests |
+| `npm run test:rust` | Run Rust tests |
+| `npm run test:node` | Run Node tests against the existing addon |
+| `npm run bench` | Build and run benchmarks |
+| `npm run example` | Build and generate example SVG/PNG files |
+
+Restart processes using the addon after rebuilding.
+
+## Tests
+
+Rust tests compare complete QR matrices against `qrcodegen` across all versions
+and error-correction levels. Node tests independently decode PNG output with
+`jsQR` and cover validation, logos, transparency, and native replacement.
+
+Install `rsvg-convert` to enable independent SVG rasterization tests. These
+tests explicitly skip when the tool is unavailable.
+
+## Example
 
 ```sh
-npm run build:native
-```
-
-Builds replace the native artifact atomically. Running Node processes retain
-their loaded binary and must restart to use a new build.
-
-Tests compare QR matrices against an independent encoder and decode generated
-images with `jsQR`. They also cover input validation, PNG parsing, logo layout,
-transparency, and safe native replacement. SVG rasterization tests run when
-`rsvg-convert` is installed and explicitly skip otherwise.
-
-## Examples
-
-```sh
-npm run example
 npm run example -- "https://example.org/custom"
 ```
 
-Both commands build the addon and write `qr.svg` and `qr.png` under
-`example/output/generic/`. The [example source](./example/generate.js) creates
-its logo assets in memory and has no service-specific dependencies.
+Writes `qr.svg` and `qr.png` to `example/output/generic/`.
+The [example](./example/generate.js) creates its own logo assets in memory.
 
-## Benchmarks
-
-```sh
-npm run bench
-```
-
-This builds the addon and measures SVG/PNG throughput and output sizes.
-Record the hardware, Node.js version, and Rust version alongside results.
-See [BENCHMARKS.md](./BENCHMARKS.md) for methodology and recorded measurements.
-
-For encoder, renderer, and asset-parser design, see
-[ARCHITECTURE.md](./ARCHITECTURE.md).
+See [BENCHMARKS.md](./BENCHMARKS.md) for benchmark settings and measurements,
+and [ARCHITECTURE.md](./ARCHITECTURE.md) for implementation details.

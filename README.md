@@ -6,7 +6,7 @@ square modules, transparent colors, and custom logos.
 ## Install
 
 Requires Node.js 26 or newer on Linux x86-64 with glibc or Apple Silicon macOS.
-Published packages include native binaries; Rust is only needed to build from source.
+Native binaries are included; Rust is only needed to build from source.
 
 ```sh
 npm install @eriksremess/qr --registry=https://npm.pkg.github.com
@@ -61,6 +61,7 @@ Supply each format separately; SVG logos are not converted to PNG automatically.
 
 ```js
 import { readFileSync } from "node:fs";
+import { QrRenderer } from "@eriksremess/qr";
 
 const branded = new QrRenderer({
   errorCorrection: "high",
