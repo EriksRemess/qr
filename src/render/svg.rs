@@ -192,7 +192,8 @@ mod tests {
         let svg = render_svg(&symbol, &style, 512, Some(&logo));
         assert!(svg.contains("shape-rendering=\"crispEdges\""));
         assert!(!svg.contains("<image "));
-        assert!(svg.contains("fill:none!important"));
+        assert!(svg.contains("fill=\"none\" stroke=\"#ffffff\""));
+        assert!(!svg.contains(" style="));
         assert!(svg.contains("shape-rendering=\"geometricPrecision\""));
     }
 }

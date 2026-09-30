@@ -141,11 +141,18 @@ impl SvgLogo {
         let input = input.trim_start_matches('\u{feff}');
         let parsed = tags(input)?;
         let mut decoded_values = Vec::new();
+        let mut needs_isolation = parsed.iter().any(|tag| {
+            matches!(
+                tag.name.rsplit(':').next(),
+                Some("style" | "script" | "foreignObject")
+            )
+        });
         for tag in &parsed {
             if !tag.closing {
                 for (name, value, _) in attributes(tag.attributes)? {
                     let value = decode_attribute(value)?;
                     if name == "style" {
+                        needs_isolation = true;
                         validate_inline_style(&value)?;
                     }
                     decoded_values.push(value);
@@ -154,13 +161,8 @@ impl SvgLogo {
         }
         // Keep ordinary path-based logos inline for crisp arbitrary zoom even
         // in SVG rasterizers that cache image subdocuments at nominal size.
-        // Stylesheets require a separate document to isolate their selectors.
-        let has_stylesheet = parsed.iter().any(|tag| {
-            matches!(
-                tag.name.rsplit(':').next(),
-                Some("style" | "script" | "foreignObject")
-            )
-        });
+        // CSS-bearing logos require a separate document: its selectors must
+        // remain isolated, and a host may forbid inline style attributes.
         let root = &parsed[0];
         let attrs = attributes(root.attributes)?;
         let view_box = attrs
@@ -200,15 +202,17 @@ impl SvgLogo {
                 document.push_str(source);
             }
         }
-        // Presentation attributes lose to source CSS, including !important.
-        // Append our own important geometry declarations last, while retaining
-        // unrelated presentation (fill, opacity, fonts, etc.).
-        write!(
-            document,
-            " style=\"{}\"",
-            escape_attribute(&viewport_style(&root_style, values[2], values[3], 0.0, 0.0))
-        )
-        .unwrap();
+        if needs_isolation {
+            // Override source CSS geometry only inside the isolated image.
+            // Ordinary inline logos use the width/height attributes above and
+            // need no CSS, so they work with style-src-attr 'none'.
+            write!(
+                document,
+                " style=\"{}\"",
+                escape_attribute(&viewport_style(&root_style, values[2], values[3], 0.0, 0.0))
+            )
+            .unwrap();
+        }
         document.push('>');
         if !root.empty {
             let close = parsed.last().ok_or(RenderError::InvalidSvgLogo)?;
@@ -226,7 +230,7 @@ impl SvgLogo {
         }
         Ok(Self {
             image_uri: data_uri(&document),
-            inline_svg: if has_stylesheet {
+            inline_svg: if needs_isolation {
                 None
             } else {
                 Some(namespace_ids(
@@ -249,13 +253,15 @@ impl SvgLogo {
 
     /// Build a separately isolated, stroke-only SVG once at construction. A
     /// group's inherited stroke cannot override a child's own fill/stroke or
-    /// CSS. Inline !important declarations on drawable nodes can. Definition
-    /// subtrees used for clipping/masking/paint must keep their original fills.
+    /// CSS. For CSS-free inline logos, replace the drawable's presentation
+    /// attributes; isolated CSS-bearing logos need important declarations.
+    /// Definition subtrees used for clipping/masking/paint keep their fills.
     pub fn set_outline(&mut self, color: Color, width: f64) -> Result<(), RenderError> {
         if color.alpha == 0 || width == 0.0 {
             return Ok(());
         }
         let mut output = String::with_capacity(self.document.len() * 2);
+        let inline = self.inline_svg.is_some();
         let mut previous = 0;
         let mut paint_definition_depth = 0_usize;
         for tag in tags(&self.document)? {
@@ -288,14 +294,31 @@ impl SvgLogo {
                 for (name, value, source) in attributes(tag.attributes)? {
                     if name == "style" {
                         style = decode_attribute(value)?;
-                    } else {
+                    } else if !(inline
+                        && (matches!(
+                            name,
+                            "fill"
+                                | "stroke"
+                                | "stroke-opacity"
+                                | "stroke-width"
+                                | "vector-effect"
+                                | "stroke-linejoin"
+                                | "stroke-linecap"
+                        ) || (bitmap && name == "display")))
+                    {
                         output.push(' ');
                         output.push_str(source);
                     }
                 }
-                write!(output, " style=\"{};{}fill:none!important;stroke:#{:02x}{:02x}{:02x}!important;stroke-opacity:{}!important;stroke-width:{}!important;vector-effect:non-scaling-stroke!important;stroke-linejoin:round!important;stroke-linecap:round!important\"{}>",
-                    escape_attribute(&style), if bitmap { "display:none!important;" } else { "" }, color.red, color.green, color.blue,
-                    f64::from(color.alpha) / 255.0, self.outline_marker, if tag.empty { "/" } else { "" }).unwrap();
+                if inline {
+                    write!(output, "{} fill=\"none\" stroke=\"#{:02x}{:02x}{:02x}\" stroke-opacity=\"{}\" stroke-width=\"{}\" vector-effect=\"non-scaling-stroke\" stroke-linejoin=\"round\" stroke-linecap=\"round\"{}>",
+                        if bitmap { " display=\"none\"" } else { "" }, color.red, color.green, color.blue,
+                        f64::from(color.alpha) / 255.0, self.outline_marker, if tag.empty { "/" } else { "" }).unwrap();
+                } else {
+                    write!(output, " style=\"{};{}fill:none!important;stroke:#{:02x}{:02x}{:02x}!important;stroke-opacity:{}!important;stroke-width:{}!important;vector-effect:non-scaling-stroke!important;stroke-linejoin:round!important;stroke-linecap:round!important\"{}>",
+                        escape_attribute(&style), if bitmap { "display:none!important;" } else { "" }, color.red, color.green, color.blue,
+                        f64::from(color.alpha) / 255.0, self.outline_marker, if tag.empty { "/" } else { "" }).unwrap();
+                }
                 previous = tag.end;
             }
             if !tag.closing && !tag.empty && protected {
@@ -319,26 +342,43 @@ impl SvgLogo {
                 inner.push_str(source);
             }
         }
-        write!(
-            inner,
-            " style=\"{};overflow:visible!important\">{}",
-            escape_attribute(&viewport_style(
-                &root_style,
-                self.width,
-                self.height,
-                self.view_x,
-                self.view_y
-            )),
-            &output[root.end..]
-        )
-        .unwrap();
+        if inline {
+            write!(inner, " overflow=\"visible\">{}", &output[root.end..]).unwrap();
+        } else {
+            write!(
+                inner,
+                " style=\"{};overflow:visible!important\">{}",
+                escape_attribute(&viewport_style(
+                    &root_style,
+                    self.width,
+                    self.height,
+                    self.view_x,
+                    self.view_y
+                )),
+                &output[root.end..]
+            )
+            .unwrap();
+        }
         let expanded_width = self.width + padding * 2.0;
         let expanded_height = self.height + padding * 2.0;
+        let root_style = if inline {
+            String::new()
+        } else {
+            format!(
+                " style=\"{}\"",
+                escape_attribute(&viewport_style(
+                    "",
+                    expanded_width,
+                    expanded_height,
+                    0.0,
+                    0.0
+                ))
+            )
+        };
         let expanded = format!(
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{expanded_width}\" height=\"{expanded_height}\" viewBox=\"{} {} {expanded_width} {expanded_height}\" style=\"{}\">{output}</svg>",
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{expanded_width}\" height=\"{expanded_height}\" viewBox=\"{} {} {expanded_width} {expanded_height}\"{root_style}>{output}</svg>",
             self.view_x - padding,
             self.view_y - padding,
-            viewport_style("", expanded_width, expanded_height, 0.0, 0.0),
             output = inner
         );
         if self.inline_svg.is_some() {

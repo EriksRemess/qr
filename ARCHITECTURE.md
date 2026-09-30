@@ -63,9 +63,10 @@ supports non-interlaced 8-bit RGB/RGBA and RGB `tRNS` transparency. It validates
 chunk checksums, ordering, and critical chunk types.
 
 SVG logos retain their viewBox and presentation, with root geometry overridden
-to fit the configured bounds. Ordinary shape-based logos stay inline. Logos
-containing stylesheets, scripts, or foreignObject elements use isolated SVG data
-images. These require data-image support in the viewer; some viewers cache them
+to fit the configured bounds. CSS-free shape-based logos stay inline, with sizing
+and outlines expressed as presentation attributes for strict CSP hosts. Logos
+containing inline CSS, stylesheets, scripts, or foreignObject elements use isolated
+SVG data images. These require data-image support in the viewer; some viewers cache them
 at their nominal size when zooming.
 
 Inline IDs and local references use content-derived namespaces. Normal and

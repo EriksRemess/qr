@@ -530,7 +530,52 @@ test("SVG outlines override explicit strokes without repainting translucent fill
     assert.deepEqual([...outlined.data.slice(center, center + 4)], [...plain.data.slice(center, center + 4)]);
     const stroke = (145 * 290 + 108) * 4;
     assert.deepEqual([...outlined.data.slice(stroke, stroke + 4)], [255, 255, 255, 255]);
-    assert.match(renderer.svg("test"), /fill:none!important;stroke:#ffffff!important/u);
+    const output = renderer.svg("test");
+    if (attrs.startsWith("style=")) {
+      assert.match(embeddedSvgs(output).join(""), /fill:none!important;stroke:#ffffff!important/u);
+    } else {
+      assert.match(output, /fill="none" stroke="#ffffff"/u);
+      assert.doesNotMatch(output, /\sstyle=/u);
+    }
+  }
+});
+
+test("inline SVG logos and outlines need no CSP style or data-image allowances", () => {
+  const logoSvg = '<svg viewBox="8 16 24 12" fill="red" overflow="hidden">' +
+    '<defs><linearGradient id="paint"><stop stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>' +
+    '<clipPath id="clip"><rect x="8" y="16" width="24" height="12" fill="white"/></clipPath></defs>' +
+    '<path d="M10 18h20v8H10z" fill="url(#paint)" stroke="none" stroke-width="99" stroke-opacity="0" ' +
+    'vector-effect="none" stroke-linejoin="bevel" stroke-linecap="butt" clip-path="url(#clip)"/>' +
+    '<circle cx="28" cy="24" r="2" fill="pink"/></svg>';
+  for (const moduleStyle of ["square", "rounded"]) {
+    for (const svgLogoOutlineWidth of [0, 2]) {
+      const output = new QrRenderer({
+        logoSvg, moduleStyle, svgLogoOutlineWidth, svgLogoOutlineColor: "#1e1e2e",
+      }).svg("https://example.com/csp", { size: 512 });
+      assert.doesNotMatch(output, /\sstyle=|<style\b|<image\b/u);
+      assert.match(output, /fill="url\(&quot;#qr-logo-main-/u);
+      if (svgLogoOutlineWidth) {
+        assert.match(output, /fill="none" stroke="#1e1e2e" stroke-opacity="1" stroke-width="[\d.]+"/u);
+        assert.match(output, /vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/u);
+        assert.match(output, /<svg[^>]+overflow="visible"/u);
+        const outline = output.match(/<path[^>]+fill="none"[^>]+>/u)[0];
+        for (const attribute of ["fill", "stroke", "stroke-width", "stroke-opacity", "vector-effect"]) {
+          assert.equal([...outline.matchAll(new RegExp(`\\s${attribute}=`, "gu"))].length, 1, attribute);
+        }
+      }
+    }
+  }
+});
+
+test("source inline CSS stays isolated rather than leaking into the host CSP", () => {
+  for (const logoSvg of [
+    '<svg viewBox="0 0 10 10" style="fill:red"><rect width="10" height="10"/></svg>',
+    '<svg viewBox="0 0 10 10"><rect width="10" height="10" style="fill:red"/></svg>',
+  ]) {
+    const output = new QrRenderer({ logoSvg, svgLogoOutlineColor: "#fff", svgLogoOutlineWidth: 1 }).svg("css");
+    assert.doesNotMatch(output, /\sstyle=|<style\b/u);
+    assert.equal(embeddedSvgs(output).length, 2);
+    assert.match(embeddedSvgs(output)[1], /style="[^" ]*fill:red/u);
   }
 });
 
