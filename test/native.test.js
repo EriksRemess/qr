@@ -556,7 +556,7 @@ test("inline SVG logos and outlines need no CSP style or data-image allowances",
       assert.match(output, /fill="url\(&quot;#qr-logo-main-/u);
       if (svgLogoOutlineWidth) {
         assert.match(output, /fill="none" stroke="#1e1e2e" stroke-opacity="1" stroke-width="[\d.]+"/u);
-        assert.match(output, /vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/u);
+        assert.match(output, /vector-effect="none" stroke-linejoin="round" stroke-linecap="round"/u);
         assert.match(output, /<svg[^>]+overflow="visible"/u);
         const outline = output.match(/<path[^>]+fill="none"[^>]+>/u)[0];
         for (const attribute of ["fill", "stroke", "stroke-width", "stroke-opacity", "vector-effect"]) {
@@ -576,6 +576,47 @@ test("source inline CSS stays isolated rather than leaking into the host CSP", (
     assert.doesNotMatch(output, /\sstyle=|<style\b/u);
     assert.equal(embeddedSvgs(output).length, 2);
     assert.match(embeddedSvgs(output)[1], /style="[^" ]*fill:red/u);
+  }
+});
+
+test("SVG logo outlines scale with the displayed QR without changing logo size", { skip: !hasSvgRasterizer }, () => {
+  for (const body of [
+    '<rect x="1" y="1" width="8" height="8" fill="red"/>',
+    '<g transform="translate(5 5) scale(.2 .1)"><circle r="20" fill="red"/></g>',
+    '<svg width="10" height="10" viewBox="0 0 100 100"><rect x="10" y="10" width="80" height="80" fill="red"/></svg>',
+    '<style/><rect x="1" y="1" width="8" height="8" fill="red"/>',
+  ]) {
+    const renderer = new QrRenderer({
+      foreground: "#0000ff", background: "#0000ff", logoBackground: "#0000", logoScale: 0.3,
+      logoSvg: `<svg viewBox="0 0 10 10">${body}</svg>`,
+      svgLogoOutlineColor: "#fff", svgLogoOutlineWidth: 1,
+    });
+    const intrinsic = renderer.svg("test", { size: 400 });
+    for (const size of [200, 400, 800]) {
+      const resized = rasterizeSvg(intrinsic.replace('width="400" height="400"', `width="${size}" height="${size}"`));
+      const direct = rasterizeSvg(renderer.svg("test", { size }));
+      // The filled logo covers the inner half of the stroke. Its remaining
+      // white outline is 0.5 logo units, scaled by the fitted logo width.
+      const expectedWhite = size * 0.015;
+      const expectedRed = size * 0.24;
+      for (const pixels of [resized, direct]) {
+        let whiteCoverage = 0;
+        let red = 0;
+        for (let x = 0; x < size; x++) {
+          const offset = ((size / 2) * size + x) * 4;
+          const [r, g, b] = pixels.data.slice(offset, offset + 3);
+          // Include antialiased edge coverage: an isolated SVG image can be
+          // cached at its nominal resolution by the independent rasterizer.
+          if (x < size / 2) whiteCoverage += g / 255;
+          if (r >= 250 && g <= 5 && b <= 5) red++;
+        }
+        assert.ok(Math.abs(whiteCoverage - expectedWhite) <= 1, `outline at ${size}px: ${whiteCoverage}, expected ${expectedWhite}`);
+        assert.ok(Math.abs(red - expectedRed) <= 2, `logo at ${size}px: ${red}, expected ${expectedRed}`);
+      }
+      if (!body.includes("transform") && !body.includes("style") && !body.includes("<svg")) {
+        assert.deepEqual(resized.data, direct.data, "ordinary vector logos remain crisp when resized");
+      }
+    }
   }
 });
 
@@ -737,14 +778,14 @@ test("equivalent transformed shapes retain the same logo-unit outline width", { 
     ['<ellipse cx="5" cy="5" rx="4" ry="2" fill="red"/>', '<g transform="translate(5 5) scale(.2 .1)"><circle r="20" fill="red"/></g>'],
     ['<circle cx="5" cy="5" r="4" fill="red"/>', '<g transform="translate(10 10)"><g transform="scale(-.1)"><circle cx="50" cy="50" r="40" fill="red"/></g></g>'],
   ];
-  for (const size of [290, 580]) {
-    for (const isolated of [false, true]) {
-      for (const [plain, transformed] of shapes) {
-        const expected = render(plain, size, isolated);
-        const actual = render(transformed, size, isolated);
-        for (let i = 0; i < actual.length; i++) {
-          assert.ok(Math.abs(actual[i] - expected[i]) <= 2, `pixel byte ${i}, size ${size}, isolated ${isolated}`);
-        }
+  // Integral fitted image dimensions avoid intermediary image-surface
+  // antialiasing differences when comparing inline and isolated outlines.
+  for (const [size, isolated] of [[290, true], [580, true], [400, false], [800, false]]) {
+    for (const [plain, transformed] of shapes) {
+      const expected = render(plain, size, isolated);
+      const actual = render(transformed, size, isolated);
+      for (let i = 0; i < actual.length; i++) {
+        assert.ok(Math.abs(actual[i] - expected[i]) <= 2, `pixel byte ${i}, size ${size}, isolated ${isolated}`);
       }
     }
   }

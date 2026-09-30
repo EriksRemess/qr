@@ -70,13 +70,16 @@ SVG data images. These require data-image support in the viewer; some viewers ca
 at their nominal size when zooming.
 
 Inline IDs and local references use content-derived namespaces. Normal and
-outline copies have separate namespaces; outline IDs also account for rendered
+outline copies have separate namespaces; outline IDs also account for configured
 stroke width. XML references and CSS URL escapes are decoded before rewriting.
 
 Outlines are separate stroke-only copies of vector shapes and text.
 Clipping, masking, and paint definitions retain their fills. An expanded viewport
-allows strokes outside the source viewBox. Non-scaling strokes remove internal
-transform scaling; the configured width is converted to fitted output pixels.
+allows strokes outside the source viewBox. Ordinary inline outlines use logo-unit
+strokes that scale with the displayed QR. Internally transformed shapes and nested
+SVG viewports use an isolated outline image: non-scaling strokes preserve uniform
+thickness inside that document, while the image scales with the QR. These outlines
+also require data-image support.
 
 ## Input boundaries
 

@@ -115,13 +115,15 @@ fn append_logo(output: &mut String, logo: &SvgLogo, style: &Style, extent: usize
     {
         let pad_x = layout.width as f64 * padding / logo.width;
         let pad_y = layout.height as f64 * padding / logo.height;
-        // Non-scaling strokes remove internal SVG transforms. Set their
-        // viewport-pixel width from the configured logo-unit width so changing
-        // output size still scales the outline with the logo.
-        let stroke_width = decimal(
+        // Inline strokes stay in logo units and scale with the QR, including
+        // CSS resizing. Isolated outlines remove internal shape transforms;
+        // their stroke width is specified in the image viewport's pixels.
+        let stroke_width = decimal(if logo.inline_outline.is_some() {
             logo.outline_width
-                * (layout.width as f64 / logo.width).min(layout.height as f64 / logo.height),
-        );
+        } else {
+            logo.outline_width
+                * (layout.width as f64 / logo.width).min(layout.height as f64 / logo.height)
+        });
         let inline = if !is_outline {
             &logo.inline_svg
         } else {

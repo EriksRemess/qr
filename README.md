@@ -65,7 +65,8 @@ throw errors.
 Supply each format separately; SVG logos are not converted to PNG automatically.
 
 For strict CSP pages, use SVG presentation attributes rather than `style` or
-stylesheets. CSS-based logos use isolated data images, which require `img-src data:`.
+stylesheets. CSS-based logos and outlines with internal transforms or nested SVG
+viewports use isolated data images, which require `img-src data:`.
 
 ```js
 import { readFileSync } from "node:fs";

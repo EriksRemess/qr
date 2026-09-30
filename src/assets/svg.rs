@@ -261,10 +261,22 @@ impl SvgLogo {
             return Ok(());
         }
         let mut output = String::with_capacity(self.document.len() * 2);
-        let inline = self.inline_svg.is_some();
+        let parsed = tags(&self.document)?;
+        // Ordinary outlines use logo-unit strokes, so CSS resizing scales them
+        // with the logo. Internal transforms need non-scaling strokes inside an
+        // isolated image; otherwise a transformed shape changes the thickness.
+        let inline = self.inline_svg.is_some()
+            && !parsed.iter().any(|tag| {
+                !tag.closing
+                    && ((tag.name == "svg" && tag.start != 0)
+                        || tag.name == "symbol"
+                        || attributes(tag.attributes).is_ok_and(|attrs| {
+                            attrs.iter().any(|(name, _, _)| *name == "transform")
+                        }))
+            });
         let mut previous = 0;
         let mut paint_definition_depth = 0_usize;
-        for tag in tags(&self.document)? {
+        for tag in parsed {
             let local_name = tag.name.rsplit(':').next().unwrap();
             let protected = matches!(
                 local_name,
@@ -311,7 +323,7 @@ impl SvgLogo {
                     }
                 }
                 if inline {
-                    write!(output, "{} fill=\"none\" stroke=\"#{:02x}{:02x}{:02x}\" stroke-opacity=\"{}\" stroke-width=\"{}\" vector-effect=\"non-scaling-stroke\" stroke-linejoin=\"round\" stroke-linecap=\"round\"{}>",
+                    write!(output, "{} fill=\"none\" stroke=\"#{:02x}{:02x}{:02x}\" stroke-opacity=\"{}\" stroke-width=\"{}\" vector-effect=\"none\" stroke-linejoin=\"round\" stroke-linecap=\"round\"{}>",
                         if bitmap { " display=\"none\"" } else { "" }, color.red, color.green, color.blue,
                         f64::from(color.alpha) / 255.0, self.outline_marker, if tag.empty { "/" } else { "" }).unwrap();
                 } else {
@@ -381,10 +393,9 @@ impl SvgLogo {
             self.view_y - padding,
             output = inner
         );
-        if self.inline_svg.is_some() {
-            // Definitions containing non-scaling strokes also depend on the
-            // rendered pixel width. Substitute that slot in IDs and references
-            // alongside the stroke declarations at render time.
+        if inline {
+            // Keep the configured stroke width in definition IDs as well as
+            // declarations, so different outlines cannot share definitions.
             let prefix = format!(
                 "{}{}-",
                 document_prefix(&expanded, "outline"),
