@@ -1,4 +1,4 @@
-use super::Style;
+use super::{ModuleStyle, Style, rounded::RoundedGeometry};
 use crate::assets::SvgLogo;
 use crate::core::Symbol;
 use std::borrow::Cow;
@@ -9,6 +9,7 @@ use std::fmt::Write;
 /// Square modules are coalesced into horizontal runs. This substantially
 /// reduces both generation time and document size compared with one element
 /// per module, while keeping every module geometrically exact.
+/// The rounded style uses the same connected contours as the PNG rasterizer.
 pub fn render_svg(symbol: &Symbol, style: &Style, size: u32, logo: Option<&SvgLogo>) -> String {
     let margin = style.margin as usize;
     let extent = symbol.size + margin * 2;
@@ -31,37 +32,47 @@ pub fn render_svg(symbol: &Symbol, style: &Style, size: u32, logo: Option<&SvgLo
         .expect("writing to a String cannot fail");
     }
 
-    let mut square_path = String::with_capacity(symbol.modules.len() * 2);
-    for y in 0..symbol.size {
-        let mut x = 0;
-        while x < symbol.size {
-            if !symbol.module(x, y) {
+    let module_path = if style.module_style == ModuleStyle::Rounded {
+        RoundedGeometry::new(symbol, margin, size as usize).svg_path()
+    } else {
+        let mut square_path = String::with_capacity(symbol.modules.len() * 2);
+        for y in 0..symbol.size {
+            let mut x = 0;
+            while x < symbol.size {
+                if !symbol.module(x, y) {
+                    x += 1;
+                    continue;
+                }
+                let start = x;
                 x += 1;
-                continue;
+                while x < symbol.size && symbol.module(x, y) {
+                    x += 1;
+                }
+                write!(
+                    square_path,
+                    "M{} {}h{}v1H{}z",
+                    start + margin,
+                    y + margin,
+                    x - start,
+                    start + margin
+                )
+                .expect("writing to a String cannot fail");
             }
-            let start = x;
-            x += 1;
-            while x < symbol.size && symbol.module(x, y) {
-                x += 1;
-            }
-            write!(
-                square_path,
-                "M{} {}h{}v1H{}z",
-                start + margin,
-                y + margin,
-                x - start,
-                start + margin
-            )
-            .expect("writing to a String cannot fail");
         }
-    }
+        square_path
+    };
 
-    if !square_path.is_empty() {
+    if !module_path.is_empty() {
         write!(
             output,
-            "<path fill=\"{}\"{} d=\"{square_path}\"/>",
+            "<path fill=\"{}\"{}{} d=\"{module_path}\"/>",
             style.foreground.svg_hex(),
-            opacity_attribute("fill", style.foreground.svg_opacity())
+            opacity_attribute("fill", style.foreground.svg_opacity()),
+            if style.module_style == ModuleStyle::Rounded {
+                " shape-rendering=\"geometricPrecision\" fill-rule=\"evenodd\""
+            } else {
+                ""
+            }
         )
         .expect("writing to a String cannot fail");
     }

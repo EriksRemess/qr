@@ -12,10 +12,11 @@ use assets::{PngLogo, SvgLogo};
 use core::{EcLevel, encode_text};
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
-use render::{Color, DEFAULT_SIZE, Style, render_png, render_svg, validate_size};
+use render::{Color, DEFAULT_SIZE, ModuleStyle, Style, render_png, render_svg, validate_size};
 
 #[napi(object)]
 pub struct RendererOptions {
+    pub module_style: Option<String>,
     pub background: Option<String>,
     pub foreground: Option<String>,
     pub margin: Option<f64>,
@@ -46,6 +47,7 @@ impl QrRenderer {
     #[napi(constructor)]
     pub fn new(options: Option<RendererOptions>) -> napi::Result<Self> {
         let options = options.unwrap_or(RendererOptions {
+            module_style: None,
             background: None,
             foreground: None,
             margin: None,
@@ -59,6 +61,13 @@ impl QrRenderer {
             svg_logo_outline_width: None,
         });
         let mut style = Style::default();
+        if let Some(value) = options.module_style {
+            style.module_style = match value.as_str() {
+                "square" => ModuleStyle::Square,
+                "rounded" => ModuleStyle::Rounded,
+                _ => return Err(napi_error("moduleStyle must be square or rounded")),
+            };
+        }
         if let Some(value) = options.background {
             style.background = Color::parse(&value).map_err(napi_error)?;
         }

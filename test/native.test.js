@@ -176,6 +176,70 @@ test("SVG output contains the configured dimensions and colors", () => {
   assert.doesNotMatch(svg, /<circle|a\.5\.5/u);
 });
 
+test("square is the default and unsupported module styles fail validation", () => {
+  const implicit = new QrRenderer();
+  const explicit = new QrRenderer({ moduleStyle: "square" });
+  assert.equal(implicit.svg("default"), explicit.svg("default"));
+  assert.deepEqual(implicit.png("default"), explicit.png("default"));
+  for (const moduleStyle of ["dots", "round", "", "Rounded"]) {
+    assert.throws(() => new QrRenderer({ moduleStyle }), /moduleStyle must be square or rounded/u);
+  }
+});
+
+test("rounded PNG symbols decode at several sizes, payloads and correction levels", () => {
+  for (const errorCorrection of ["low", "medium", "quartile", "high"]) {
+    const renderer = new QrRenderer({ moduleStyle: "rounded", errorCorrection });
+    for (const text of ["a", "https://example.com/rounded", "https://example.com/ābols?日本語=✓", "https://example.com/".repeat(12)]) {
+      for (const size of text.length > 100 ? [512, 1024] : [256, 512]) {
+        const png = decodeRgbaPng(renderer.png(text, { size }));
+        assert.equal(jsQR(png.data, png.width, png.height)?.data, text, `${errorCorrection}, ${size}px, ${text}`);
+      }
+    }
+  }
+});
+
+function* roundedFinderRegressions() {
+  yield { errorCorrection: "quartile", text: "x".repeat(450) };
+  // Retain failing dense URL layouts as compact, deterministic fixtures.
+  for (const [errorCorrection, length, initialSeed] of [
+    ["quartile", 453, 3_882_932_285],
+    ["high", 348, 2_981_535_062],
+    ["quartile", 459, 3_941_585_329],
+    ["high", 350, 3_002_117_140],
+  ]) {
+    let seed = initialSeed;
+    let text = "https://example.org/";
+    while (text.length < length) {
+      seed = (Math.imul(seed, 1_664_525) + 1_013_904_223) >>> 0;
+      text += "abcdefghijklmnopqrstuvwxyz0123456789"[Math.floor(seed / 2 ** 32 * 36)];
+    }
+    yield { errorCorrection, text };
+  }
+}
+
+test("dense rounded PNG finder patterns retain the correct scan dimension", () => {
+  for (const { errorCorrection, text } of roundedFinderRegressions()) {
+    const renderer = new QrRenderer({ errorCorrection, moduleStyle: "rounded" });
+    for (const size of [512, 1024]) {
+      const png = decodeRgbaPng(renderer.png(text, { size }));
+      assert.equal(jsQR(png.data, size, size)?.data, text, `${errorCorrection}, ${text.length} bytes, ${size}px`);
+    }
+  }
+});
+
+test("rounded finder rings and module edges retain their centers and alpha", () => {
+  const renderer = new QrRenderer({ moduleStyle: "rounded", foreground: "#ff000080", background: "#0000" });
+  const png = decodeRgbaPng(renderer.png("a", { size: 290 }));
+  const at = (x, y) => [...png.data.slice((y * 290 + x) * 4, (y * 290 + x) * 4 + 4)];
+  assert.equal(at(40, 40)[3], 0, "rounded outer finder corner");
+  assert.deepEqual(at(75, 75), [255, 0, 0, 128], "finder center");
+  assert.equal(at(55, 75)[3], 0, "white finder ring");
+  assert.ok(png.data.some((value, index) => index % 4 === 3 && value > 0 && value < 128), "antialiased curved edges");
+  for (let i = 3; i < png.data.length; i += 4) { assert.ok(png.data[i] <= 128, "connected regions paint once"); }
+  assert.match(renderer.svg("a"), /fill-rule="evenodd"/u);
+  assert.match(renderer.svg("a"), /A1\.5 1\.5/u);
+});
+
 test("non-ASCII and malformed colors throw instead of aborting Node", () => {
   for (const value of ["#💥aa", "💥", "#ééé", "#１２", "#12345", "#12 456", "#zzzzzz", ""]) {
     for (const option of ["foreground", "background", "logoBackground", "svgLogoOutlineColor"]) {
@@ -330,6 +394,38 @@ function rasterizeSvg(svg) {
     rmSync(directory, { recursive: true, force: true });
   }
 }
+
+test("dense rounded SVG finder patterns retain the correct scan dimension", { skip: !hasSvgRasterizer }, () => {
+  for (const { errorCorrection, text } of roundedFinderRegressions()) {
+    const renderer = new QrRenderer({ errorCorrection, moduleStyle: "rounded" });
+    for (const size of [512, 1024]) {
+      const svg = rasterizeSvg(renderer.svg(text, { size }));
+      assert.equal(jsQR(svg.data, size, size)?.data, text, `${errorCorrection}, ${text.length} bytes, ${size}px`);
+    }
+  }
+});
+
+test("rounded SVG and PNG share shape geometry and remain independently decodable with logos", { skip: !hasSvgRasterizer }, () => {
+  const text = "https://example.com/rounded-logo";
+  for (const branded of [false, true]) {
+    const renderer = new QrRenderer({
+      moduleStyle: "rounded", errorCorrection: "high", foreground: "#172554",
+      logoScale: 0.18,
+      ...(branded ? { logoSvg: '<svg viewBox="0 0 48 20"><rect width="48" height="20" rx="4" fill="#2563eb"/></svg>', logoPng: createLogoPng() } : {}),
+    });
+    for (const size of [290, 512, 1024]) {
+      const png = decodeRgbaPng(renderer.png(text, { size }));
+      const svg = rasterizeSvg(renderer.svg(text, { size }));
+      assert.equal(jsQR(png.data, png.width, png.height)?.data, text, `PNG, ${size}, branded ${branded}`);
+      assert.equal(jsQR(svg.data, svg.width, svg.height)?.data, text, `SVG, ${size}, branded ${branded}`);
+      if (!branded) {
+        let difference = 0;
+        for (let offset = 0; offset < png.data.length; offset++) { difference += Math.abs(png.data[offset] - svg.data[offset]); }
+        assert.ok(difference / png.data.length < 1, `matching rasterized contours, size ${size}`);
+      }
+    }
+  }
+});
 
 test("SVG and PNG alpha match after independent SVG rasterization", { skip: !hasSvgRasterizer }, () => {
   for (const [foreground, background] of [

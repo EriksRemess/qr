@@ -38,7 +38,8 @@ tests explicitly skip when the tool is unavailable.
 npm run example -- "https://example.org/custom"
 ```
 
-Writes `qr.svg` and `qr.png` to `example/output/generic/`.
+Writes `qr.svg`/`qr.png` and `qr-rounded.svg`/`qr-rounded.png` to
+`example/output/generic/`, with the same logo and colors in both styles.
 The [example](./example/generate.js) creates its own logo assets in memory.
 
 See [BENCHMARKS.md](./BENCHMARKS.md) for benchmark settings and measurements,

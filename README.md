@@ -1,7 +1,7 @@
 # `@eriksremess/qr`
 
 Fast PNG and SVG QR codes for Node.js, powered by Rust. Supports UTF-8 text,
-square modules, transparent colors, and custom logos.
+square or connected rounded modules, transparent colors, and custom logos.
 
 ## Install
 
@@ -29,6 +29,10 @@ const png = qr.png("https://example.com", { size: 1024 }); // Buffer
 
 Both methods are synchronous. Create a renderer once per style and reuse it.
 
+Set `moduleStyle: "rounded"` for connected shapes with softened corners and
+rounded finder rings. Existing color and logo options work with either style.
+Use 512px or larger for dense rounded symbols and check the final scan result.
+
 ## Options
 
 Pass styling options to `new QrRenderer(options)`:
@@ -36,6 +40,7 @@ Pass styling options to `new QrRenderer(options)`:
 | Option | Default | Values |
 | --- | --- | --- |
 | `errorCorrection` | `"medium"` | `"low"`, `"medium"`, `"quartile"`, `"high"` |
+| `moduleStyle` | `"square"` | `"square"`, `"rounded"` |
 | `foreground` | `"#000000"` | Hex color |
 | `background` | `"#ffffff"` | Hex color |
 | `margin` | `4` | Integer, 0–32 modules |

@@ -72,7 +72,7 @@ function createLogoPng() {
   ]);
 }
 
-const renderer = new QrRenderer({
+const options = {
   background: "#eff6ffff",
   errorCorrection: "high",
   foreground: "#172554ff",
@@ -82,12 +82,16 @@ const renderer = new QrRenderer({
   logoScale: 0.22,
   logoSvg,
   margin: 2,
-});
+};
+const renderer = new QrRenderer(options);
+const rounded = new QrRenderer({ ...options, moduleStyle: "rounded" });
 
 await mkdir(outputDirectory, { recursive: true });
 await Promise.all([
   writeFile(new URL("qr.svg", outputDirectory), renderer.svg(text, { size: 512 }), "utf8"),
   writeFile(new URL("qr.png", outputDirectory), renderer.png(text, { size: 1_024 })),
+  writeFile(new URL("qr-rounded.svg", outputDirectory), rounded.svg(text, { size: 512 }), "utf8"),
+  writeFile(new URL("qr-rounded.png", outputDirectory), rounded.png(text, { size: 1_024 })),
 ]);
 
-console.log(`Generated ${text} as example/output/generic/qr.svg and qr.png`);
+console.log(`Generated square and rounded SVG/PNG examples for ${text} in example/output/generic/`);

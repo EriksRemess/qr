@@ -1,6 +1,7 @@
 //! Format-independent styling and concrete SVG/PNG renderers.
 
 mod png;
+mod rounded;
 mod svg;
 
 use crate::core::{EcLevel, Symbol};
@@ -11,6 +12,13 @@ pub use svg::render_svg;
 
 pub const DEFAULT_SIZE: u32 = 512;
 pub const MAX_SIZE: u32 = 4096;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ModuleStyle {
+    #[default]
+    Square,
+    Rounded,
+}
 
 /// Shared pixel layout for both formats. SVG keeps vector logo geometry but
 /// places it on the same output-pixel bounds as the raster compositor.
@@ -116,6 +124,7 @@ impl Color {
 
 #[derive(Clone, Debug)]
 pub struct Style {
+    pub module_style: ModuleStyle,
     pub foreground: Color,
     pub background: Color,
     pub margin: u32,
@@ -134,6 +143,7 @@ pub struct Style {
 impl Default for Style {
     fn default() -> Self {
         Self {
+            module_style: ModuleStyle::Square,
             foreground: Color::BLACK,
             background: Color::WHITE,
             margin: 4,

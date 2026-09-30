@@ -1,6 +1,8 @@
 export type ErrorCorrection = "low" | "medium" | "quartile" | "high";
 
 export interface RendererOptions {
+  /** Square modules (default), or connected rounded shapes with rounded finder rings. */
+  moduleStyle?: "square" | "rounded";
   /** Background color as #RGB, #RGBA, #RRGGBB, or #RRGGBBAA. */
   background?: string;
   /** Hex foreground color, composited over background using source-over alpha. */

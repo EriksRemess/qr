@@ -10,6 +10,7 @@
 | `src/render/mod.rs` | Colors, dimensions, and shared logo layout |
 | `src/render/svg.rs` | SVG output |
 | `src/render/png.rs` | Rasterization, compositing, and PNG output |
+| `src/render/rounded.rs` | Shared rounded contours and scanline coverage |
 | `src/assets.rs` | PNG logo decoding |
 | `src/assets/svg.rs` | SVG logo preparation |
 
@@ -34,6 +35,14 @@ and dark/light balance. The lowest-penalty mask is applied to the final symbol.
 
 SVG output combines adjacent dark modules into horizontal path runs.
 Dimensions and colors are validated; payload text is not inserted into markup.
+
+The optional rounded style traces connected module boundaries and rounds both
+outer corners and holes with circular arcs. Diagonal-only contacts stay separate.
+The three finder patterns use larger rounded rings with straight boundaries
+aligned to output pixels to preserve scanner module-size estimates. SVG fills
+these contours with the even-odd rule; PNG rasterizes them with antialiased
+scanline coverage, sharing circular evaluations and solid-span work. The
+encoded module matrix and logo layout are unchanged.
 
 PNG output is non-interlaced, 8-bit RGBA with IHDR, IDAT, and IEND chunks.
 Scanlines use the Sub filter and zlib's RLE strategy. Filtered rows are cached

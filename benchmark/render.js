@@ -60,6 +60,11 @@ for (const size of [256, 512, 1_024]) {
   }));
 }
 
+const rounded = new QrRenderer({ errorCorrection: "high", foreground: "#172554", moduleStyle: "rounded" });
+const roundedText = payload(32);
+rows.push(run({ iterations: svgIterations, name: "SVG rounded 32B 512px", render: () => rounded.svg(roundedText, { size: 512 }) }));
+rows.push(run({ iterations: pngIterations, name: "PNG rounded 32B 1024px", render: () => rounded.png(roundedText, { size: 1_024 }) }));
+
 const nameWidth = Math.max(...rows.map(({ name }) => name.length));
 console.log(`Node ${process.version} ${process.platform}-${process.arch}`);
 console.log(`warmup=${warmup} svgIterations=${svgIterations} pngIterations=${pngIterations}\n`);
