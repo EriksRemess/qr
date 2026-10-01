@@ -557,7 +557,7 @@ test("inline SVG logos and outlines need no CSP style or data-image allowances",
       if (svgLogoOutlineWidth) {
         assert.match(output, /fill="none" stroke="#1e1e2e" stroke-opacity="1" stroke-width="[\d.]+"/u);
         assert.match(output, /vector-effect="none" stroke-linejoin="round" stroke-linecap="round"/u);
-        assert.match(output, /<svg[^>]+overflow="visible"/u);
+        assert.match(output, /<symbol[^>]+overflow="visible"/u);
         const outline = output.match(/<path[^>]+fill="none"[^>]+>/u)[0];
         for (const attribute of ["fill", "stroke", "stroke-width", "stroke-opacity", "vector-effect"]) {
           assert.equal([...outline.matchAll(new RegExp(`\\s${attribute}=`, "gu"))].length, 1, attribute);
@@ -629,6 +629,48 @@ test("SVG outline viewport includes strokes outside the source viewBox", { skip:
   const png = rasterizeSvg(renderer.svg("test", { size: 290 }));
   const offset = (145 * 290 + 99) * 4; // Left of the original 101px logo boundary.
   assert.deepEqual([...png.data.slice(offset, offset + 4)], [255, 255, 255, 255]);
+});
+
+test("host SVG overflow rules do not crop inline logo outlines", { skip: !hasSvgRasterizer }, () => {
+  for (const logoSvg of [
+    '<svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="5" fill="red"/></svg>',
+    '<svg id="viewport" viewBox="10 20 10 10"><circle cx="15" cy="25" r="5" fill="red"/></svg>',
+    '<svg viewBox="0 0 10 10"><rect width="100%" height="100%" fill="red"/></svg>',
+  ]) {
+    const renderer = new QrRenderer({
+      foreground: "#0000ff", background: "#0000ff", logoBackground: "#0000", logoScale: 0.3,
+      logoSvg, svgLogoOutlineColor: "#fff", svgLogoOutlineWidth: 1,
+    });
+    for (const size of [200, 400, 800]) {
+      const svg = renderer.svg("test", { size });
+      const hosted = svg.replace("><path", "><style>svg{overflow:hidden}</style><path");
+      assert.deepEqual(rasterizeSvg(hosted).data, rasterizeSvg(svg).data, `outline at ${size}px`);
+    }
+  }
+});
+
+test("inline logo outlines preserve root presentation effects", { skip: !hasSvgRasterizer }, () => {
+  const body = '<defs><clipPath id="clip"><circle cx="5" cy="5" r="4"/></clipPath>' +
+    '<mask id="mask"><rect width="10" height="10" fill="white"/></mask>' +
+    '<filter id="filter"><feComponentTransfer><feFuncA type="linear" slope=".5"/></feComponentTransfer></filter>' +
+    '</defs><rect width="100%" height="100%" fill="red"/>';
+  for (const effects of ['opacity=".5"', 'clip-path="url(#clip)"', 'mask="url(#mask)"', 'filter="url(#filter)"', 'display="none"']) {
+    const render = (rootEffects, groupEffects, size, hosted) => {
+      const svg = new QrRenderer({
+        foreground: "#0000ff", background: "#0000ff", logoBackground: "#0000", logoScale: 0.3,
+        logoSvg: `<svg id="viewport" viewBox="0 0 10 10" ${rootEffects}><g ${groupEffects}>${body}</g></svg>`,
+        svgLogoOutlineColor: "#fff", svgLogoOutlineWidth: 1,
+      }).svg("test", { size });
+      assert.doesNotMatch(svg, /\sstyle=|<style\b|<image\b/u);
+      return rasterizeSvg(hosted ? svg.replace("><path", "><style>svg{overflow:hidden}</style><path") : svg).data;
+    };
+    for (const size of [200, 400]) {
+      const expected = render("", effects, size, false);
+      for (const hosted of [false, true]) {
+        assert.deepEqual(render(effects, "", size, hosted), expected, `${effects} at ${size}px, hosted ${hosted}`);
+      }
+    }
+  }
 });
 
 test("inline logo and outline definitions have independent IDs and references", { skip: !hasSvgRasterizer }, () => {

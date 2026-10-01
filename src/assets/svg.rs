@@ -338,24 +338,64 @@ impl SvgLogo {
             }
         }
         output.push_str(&self.document[previous..]);
-        // Give strokes room outside the original viewBox. Keep an inner SVG
-        // with the original viewport so percentage-based source geometry does
+        // Give strokes room outside the original viewBox. Keep an inner viewport
+        // with the original dimensions so percentage-based source geometry does
         // not change when the outline viewport grows.
         let padding = width / 2.0;
         let parsed = tags(&output)?;
         let root = &parsed[0];
-        let mut inner = format!("<svg x=\"{}\" y=\"{}\"", self.view_x, self.view_y);
+        let root_attributes = attributes(root.attributes)?;
+        let viewport_id = root_attributes
+            .iter()
+            .find(|(name, _, _)| *name == "id")
+            .map(|(_, value, _)| decode_attribute(value))
+            .transpose()?
+            .unwrap_or_else(|| format!("{}-viewport", self.outline_marker));
+        let mut inner = if inline {
+            "<symbol".to_owned()
+        } else {
+            format!("<svg x=\"{}\" y=\"{}\"", self.view_x, self.view_y)
+        };
         let mut root_style = String::new();
-        for (name, value, source) in attributes(root.attributes)? {
+        let mut presentation = "<g".to_owned();
+        for &(name, value, source) in &root_attributes {
             if name == "style" {
                 root_style = decode_attribute(value)?;
             } else if !matches!(name, "x" | "y" | "overflow") {
-                inner.push(' ');
-                inner.push_str(source);
+                let target = if inline
+                    && !matches!(
+                        name,
+                        "id" | "xmlns" | "width" | "height" | "viewBox" | "preserveAspectRatio"
+                    )
+                    && !name.starts_with("xmlns:")
+                {
+                    &mut presentation
+                } else {
+                    &mut inner
+                };
+                target.push(' ');
+                target.push_str(source);
             }
         }
         if inline {
-            write!(inner, " overflow=\"visible\">{}", &output[root.end..]).unwrap();
+            if !root_attributes.iter().any(|(name, _, _)| *name == "id") {
+                write!(inner, " id=\"{}\"", escape_attribute(&viewport_id)).unwrap();
+            }
+            let close = parsed.last().ok_or(RenderError::InvalidSvgLogo)?;
+            write!(
+                inner,
+                " overflow=\"visible\">{presentation}>{}</g></symbol>",
+                &output[root.end..close.start]
+            )
+            .unwrap();
+            inner = format!(
+                "<defs>{inner}</defs><use href=\"#{}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"/>",
+                escape_attribute(&viewport_id),
+                self.view_x,
+                self.view_y,
+                self.width,
+                self.height
+            );
         } else {
             write!(
                 inner,

@@ -75,9 +75,12 @@ stroke width. XML references and CSS URL escapes are decoded before rewriting.
 
 Outlines are separate stroke-only copies of vector shapes and text.
 Clipping, masking, and paint definitions retain their fills. An expanded viewport
-allows strokes outside the source viewBox. Ordinary inline outlines use logo-unit
-strokes that scale with the displayed QR. Internally transformed shapes and nested
-SVG viewports use an isolated outline image: non-scaling strokes preserve uniform
+allows strokes outside the source viewBox. Inline outlines retain the original
+viewport in a symbol, so host `svg { overflow: hidden }` rules cannot crop its
+strokes. Root presentation effects apply to a rendered group inside the symbol.
+Ordinary inline outlines use logo-unit strokes that scale with the
+displayed QR. Internally transformed shapes and nested SVG viewports use an
+isolated outline image: non-scaling strokes preserve uniform
 thickness inside that document, while the image scales with the QR. These outlines
 also require data-image support.
 
