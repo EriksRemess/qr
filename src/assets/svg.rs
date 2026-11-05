@@ -268,8 +268,8 @@ impl SvgLogo {
         let inline = self.inline_svg.is_some()
             && !parsed.iter().any(|tag| {
                 !tag.closing
-                    && ((tag.name == "svg" && tag.start != 0)
-                        || tag.name == "symbol"
+                    && ((tag.name.rsplit(':').next() == Some("svg") && tag.start != 0)
+                        || tag.name.rsplit(':').next() == Some("symbol")
                         || attributes(tag.attributes).is_ok_and(|attrs| {
                             attrs.iter().any(|(name, _, _)| *name == "transform")
                         }))
@@ -482,17 +482,36 @@ fn namespace_ids(document: &str, prefix: &str) -> Result<String, RenderError> {
     let ids = ids.iter().map(String::as_str).collect::<Vec<_>>();
     let mut output = String::with_capacity(document.len());
     let mut previous = 0;
+    let mut namespaces: Vec<Vec<(&str, String)>> = Vec::new();
     for tag in parsed {
         if tag.closing {
+            namespaces.pop();
             continue;
         }
+        let attrs = attributes(tag.attributes)?;
+        let mut declarations = Vec::new();
+        for (name, value, _) in &attrs {
+            if let Some(prefix) = name.strip_prefix("xmlns:") {
+                declarations.push((prefix, decode_attribute(value)?));
+            }
+        }
+        namespaces.push(declarations);
         output.push_str(&document[previous..tag.start]);
         write!(output, "<{}", tag.name).unwrap();
-        for (name, value, _) in attributes(tag.attributes)? {
+        for (name, value, _) in attrs {
+            let href = name == "href"
+                || name.strip_suffix(":href").is_some_and(|prefix| {
+                    namespaces
+                        .iter()
+                        .rev()
+                        .flatten()
+                        .find(|(bound, _)| *bound == prefix)
+                        .is_some_and(|(_, uri)| uri == "http://www.w3.org/1999/xlink")
+                });
             let value = decode_attribute(value)?;
             let value = if name == "id" {
                 format!("{prefix}{value}")
-            } else if matches!(name, "href" | "xlink:href") && value.starts_with('#') {
+            } else if href && value.starts_with('#') {
                 format!("#{prefix}{}", &value[1..])
             } else {
                 namespace_urls(&value, prefix, &ids)
@@ -501,6 +520,9 @@ fn namespace_ids(document: &str, prefix: &str) -> Result<String, RenderError> {
         }
         output.push_str(if tag.empty { "/>" } else { ">" });
         previous = tag.end;
+        if tag.empty {
+            namespaces.pop();
+        }
     }
     output.push_str(&document[previous..]);
     Ok(output)
@@ -785,7 +807,10 @@ fn namespace_urls(value: &str, prefix: &str, ids: &[&str]) -> String {
         };
         offset = content_start + consumed;
         let decoded = decode_css(reference);
-        if let Some(id) = decoded.strip_prefix('#').filter(|id| ids.contains(id)) {
+        if let Some(id) = decoded
+            .strip_prefix('#')
+            .filter(|id| decode_fragment(id).is_some_and(|decoded| ids.contains(&decoded.as_str())))
+        {
             output.push_str(&value[copied..start]);
             // Always serialize a quoted CSS string; escaped punctuation in an
             // ID must not become URL syntax after decoding.
@@ -805,6 +830,30 @@ fn namespace_urls(value: &str, prefix: &str, ids: &[&str]) -> String {
     }
     output.push_str(&value[copied..]);
     output
+}
+
+/// URL fragments are percent-decoded once when resolving an element ID. Keep
+/// the original escaped spelling when emitting the rewritten URL, since an ID
+/// can itself contain a literal percent escape (e.g. id="a%20b").
+fn decode_fragment(input: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(input.len());
+    let mut remaining = input.as_bytes();
+    while let Some((&byte, rest)) = remaining.split_first() {
+        if byte == b'%'
+            && let Some(hex) = rest.get(..2)
+            && let (Some(high), Some(low)) = (
+                char::from(hex[0]).to_digit(16),
+                char::from(hex[1]).to_digit(16),
+            )
+        {
+            bytes.push((high * 16 + low) as u8);
+            remaining = &rest[2..];
+        } else {
+            bytes.push(byte);
+            remaining = rest;
+        }
+    }
+    String::from_utf8(bytes).ok()
 }
 
 /// Percent encoding is intentionally small and dependency-free. Only URI
@@ -868,6 +917,46 @@ mod tests {
             namespace_urls(value, "qr-logo-main-", &["a", "qr-logo-main-a"]),
             "fill:url(\"#qr-logo-main-a\");clip-path:url(\"#qr-logo-main-qr-logo-main-a\");stroke:#a"
         );
+    }
+
+    #[test]
+    fn percent_encoded_fragments_resolve_once_before_namespacing() {
+        for (id, fragment) in [
+            ("paint", "%70aint"),
+            ("krāsa", "kr%C4%81sa"),
+            ("a%20b", "a%2520b"),
+            ("a%", "a%"),
+            ("💥", "💥"),
+        ] {
+            assert_eq!(
+                namespace_urls(&format!("url(#{fragment})"), "scope-", &[id]),
+                format!("url(\"#scope-{fragment}\")")
+            );
+        }
+        for value in ["url(#%ff)", "url(#%💥)", "url(#missing)", "url(#a%20b)"] {
+            assert_eq!(namespace_urls(value, "scope-", &["a%20b"]), value);
+        }
+    }
+
+    #[test]
+    fn xlink_references_follow_namespace_bindings() {
+        let document = "<svg viewBox='0 0 10 10' xmlns:link='http://www.w3.org/1999/xlink'><defs><rect id='shape'/></defs><use link:href='#shape'/><g xmlns:link='urn:metadata'><use link:href='#shape'/></g><use link:href='#shape'/><use xmlns:link='urn:metadata' link:href='#shape'/><use link:href='#shape'/></svg>";
+        let output = namespace_ids(document, "scope-").unwrap();
+        assert_eq!(output.matches("link:href=\"#scope-shape\"").count(), 3);
+        assert_eq!(output.matches("link:href=\"#shape\"").count(), 2);
+    }
+
+    #[test]
+    fn prefixed_viewports_and_symbols_need_isolated_outlines() {
+        for element in ["svg", "symbol"] {
+            let mut logo = SvgLogo::parse(&format!(
+                "<svg viewBox='0 0 10 10' xmlns:s='http://www.w3.org/2000/svg'><s:{element} viewBox='0 0 100 100'><rect width='100' height='100'/></s:{element}></svg>"
+            )).unwrap();
+            logo.set_outline(Color::WHITE, 1.0).unwrap();
+            assert!(logo.inline_svg.is_some());
+            assert!(logo.inline_outline.is_none());
+            assert!(logo.outline_uri.is_some());
+        }
     }
 
     #[test]

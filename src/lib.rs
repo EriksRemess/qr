@@ -44,7 +44,7 @@ pub struct QrRenderer {
 
 #[napi]
 impl QrRenderer {
-    #[napi(constructor)]
+    #[napi(constructor, strict)]
     pub fn new(options: Option<RendererOptions>) -> napi::Result<Self> {
         let options = options.unwrap_or(RendererOptions {
             module_style: None,
@@ -147,7 +147,7 @@ impl QrRenderer {
 
     /// Encode and render synchronously. SVG generation is short CPU work and
     /// avoids Promise/microtask overhead by design.
-    #[napi]
+    #[napi(strict)]
     pub fn svg(&self, text: String, options: Option<OutputOptions>) -> napi::Result<String> {
         let size = output_size(options)?;
         let symbol = encode_text(&text, self.style.error_correction).map_err(napi_error)?;
@@ -160,7 +160,7 @@ impl QrRenderer {
     }
 
     /// Encode, rasterize, and compress synchronously into a Node.js Buffer.
-    #[napi]
+    #[napi(strict)]
     pub fn png(&self, text: String, options: Option<OutputOptions>) -> napi::Result<Buffer> {
         let size = output_size(options)?;
         let symbol = encode_text(&text, self.style.error_correction).map_err(napi_error)?;

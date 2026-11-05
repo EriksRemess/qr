@@ -867,3 +867,53 @@ test("invalid public options fail before allocating output", () => {
   );
   assert.throws(() => renderer.svg("x".repeat(3_000)), /too long/u);
 });
+
+test("primitive options are rejected at the native boundary", () => {
+  const renderer = new QrRenderer();
+  for (const options of [false, true, 0, 512, "rounded", 1n, Symbol("options"), () => {}]) {
+    assert.throws(() => new QrRenderer(options), /Expect value to be Option<Object>/u);
+    for (const format of ["svg", "png"]) {
+      assert.throws(() => renderer[format]("test", options), /Expect value to be Option<Object>/u);
+    }
+  }
+  assert.equal(new QrRenderer(undefined).svg("test"), renderer.svg("test", undefined));
+  assert.equal(new QrRenderer(null).svg("test"), renderer.svg("test", null));
+});
+
+test("percent-encoded SVG paint references survive ID namespacing", () => {
+  for (const [id, reference] of [["paint", "%70aint"], ["krāsa", "kr%C4%81sa"], ["a%20b", "a%2520b"]]) {
+    const logoSvg = '<svg viewBox="0 0 10 10"><defs>' +
+      `<linearGradient id="${id}"><stop stop-color="red"/></linearGradient></defs>` +
+      `<rect width="10" height="10" fill="url(#${reference})"/></svg>`;
+    // librsvg does not resolve percent escapes even in the original logo.
+    // Check the public output's reference target using URL decoding instead.
+    const svg = new QrRenderer({ logoSvg }).svg("test");
+    const target = svg.match(/<linearGradient id="([^"]+)"/u)?.[1];
+    const fragment = svg.match(/fill="url\(&quot;#([^&]+)&quot;\)"/u)?.[1];
+    assert.ok(target && fragment, reference);
+    assert.equal(decodeURIComponent(fragment), target, reference);
+  }
+});
+
+test("alternate XLink namespace prefixes preserve SVG logo references", { skip: !hasSvgRasterizer }, () => {
+  const logoSvg = '<svg viewBox="0 0 10 10" xmlns:link="http://www.w3.org/1999/xlink">' +
+    '<defs><rect id="shape" width="10" height="10" fill="red"/></defs><use link:href="#shape"/></svg>';
+  const pixels = rasterizeSvg(new QrRenderer({
+    foreground: "#0000ff", background: "#0000ff", logoBackground: "#0000", logoSvg,
+  }).svg("test", { size: 290 }));
+  const center = (145 * 290 + 145) * 4;
+  assert.deepEqual([...pixels.data.slice(center, center + 4)], [255, 0, 0, 255]);
+});
+
+test("namespace-prefixed SVG viewports retain logo outline width", { skip: !hasSvgRasterizer }, () => {
+  const render = (prefix) => rasterizeSvg(new QrRenderer({
+    foreground: "#0000ff", background: "#0000ff", logoBackground: "#0000", logoScale: 0.3,
+    logoSvg: '<svg viewBox="0 0 10 10" xmlns:s="http://www.w3.org/2000/svg">' +
+      `<${prefix}svg width="10" height="10" viewBox="0 0 100 100">` +
+      `<rect x="10" y="10" width="80" height="80" fill="red"/></${prefix}svg></svg>`,
+    svgLogoOutlineColor: "#fff", svgLogoOutlineWidth: 1,
+  }).svg("test", { size: 400 })).data;
+  const expected = render("");
+  const actual = render("s:");
+  assert.equal(actual.findIndex((value, index) => value !== expected[index]), -1);
+});
