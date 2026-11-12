@@ -13,7 +13,7 @@ and Windows are not supported.
 
 ## Build
 
-Run on the target platform with Node.js 26+, Rust 1.88+, and a native linker:
+Run on the target platform with Node.js 26+, Rust 1.100+, and a native linker:
 
 ```sh
 npm install

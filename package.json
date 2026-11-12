@@ -1,6 +1,6 @@
 {
   "name": "@eriksremess/qr",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "description": "Fast, customizable QR rendering for modern Node.js",
   "type": "module",
   "repository": {

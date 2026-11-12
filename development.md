@@ -1,6 +1,6 @@
 # Development
 
-Requires Node.js 26+, Rust 1.88+, and a native linker on a
+Requires Node.js 26+, Rust 1.100+, and a native linker on a
 [supported platform](./NATIVE-BUILDS.md).
 
 ```sh
@@ -22,6 +22,9 @@ npm test
 | `npm run example` | Build and generate example SVG/PNG files |
 
 Restart processes using the addon after rebuilding.
+
+Cargo rejects unused dependencies. Dependency updates use a three-day minimum
+publication age; versions already in `Cargo.lock` are unaffected.
 
 ## Tests
 

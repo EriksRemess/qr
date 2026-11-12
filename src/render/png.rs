@@ -318,20 +318,17 @@ impl<'a> LogoPlacement<'a> {
 }
 
 fn sampling_axis(source_length: usize, target_length: usize) -> Vec<AxisSample> {
-    (0..target_length)
-        .map(|target| {
-            let position = ((target as f64 + 0.5) * source_length as f64 / target_length as f64
-                - 0.5)
-                .clamp(0.0, (source_length - 1) as f64);
-            let lower = position.floor() as usize;
-            let upper = (lower + 1).min(source_length - 1);
-            AxisSample {
-                lower,
-                upper,
-                upper_weight: ((position - lower as f64) * 256.0).round() as u16,
-            }
-        })
-        .collect()
+    Vec::from_fn(target_length, |target| {
+        let position = ((target as f64 + 0.5) * source_length as f64 / target_length as f64 - 0.5)
+            .clamp(0.0, (source_length - 1) as f64);
+        let lower = position.floor() as usize;
+        let upper = (lower + 1).min(source_length - 1);
+        AxisSample {
+            lower,
+            upper,
+            upper_weight: ((position - lower as f64) * 256.0).round() as u16,
+        }
+    })
 }
 
 fn pixel_color(

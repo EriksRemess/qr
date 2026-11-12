@@ -1,13 +1,17 @@
 [package]
 name = "qr_native"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
+rust-version = "1.100"
 license = "MIT"
 description = "Fast, customizable QR rendering for Node.js"
 build = "build.rs"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
+
+[lints.cargo]
+unused_dependencies = "deny"
 
 [profile.release]
 codegen-units = 1

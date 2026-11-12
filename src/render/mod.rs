@@ -77,7 +77,7 @@ impl Color {
     };
 
     pub fn parse(input: &str) -> Result<Self, RenderError> {
-        let raw = input.strip_prefix('#').unwrap_or(input);
+        let raw = input.trim_prefix('#');
         // Check bytes before slicing: invalid UTF-8 boundaries must never
         // panic across the native Node boundary.
         if !raw.bytes().all(|byte| byte.is_ascii_hexdigit()) {

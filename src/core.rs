@@ -387,7 +387,7 @@ impl Matrix {
                     }
                 }
             }
-            upward = !upward;
+            upward.toggle();
             if right < 2 {
                 break;
             }
@@ -401,7 +401,7 @@ impl Matrix {
             for x in 0..self.size {
                 let index = self.index(x, y);
                 if !self.function[index] && mask_applies(mask, x, y) {
-                    self.modules[index] = !self.modules[index];
+                    self.modules[index].toggle();
                 }
             }
         }
