@@ -1,4 +1,4 @@
-import { access, readFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 
 const root = new URL("../", import.meta.url);
 const packageJson = JSON.parse(await readFile(new URL("package.json", root), "utf8"));
@@ -14,7 +14,12 @@ const nativeArtifacts = [
   "qr-native-linux-x64-gnu.node",
   "qr-native-darwin-arm64.node",
 ];
-await Promise.all(nativeArtifacts.map((filename) => access(new URL(`native/${filename}`, root))));
+for (const filename of nativeArtifacts) {
+  const file = await lstat(new URL(`native/${filename}`, root));
+  if (!file.isFile() || file.size === 0) {
+    throw new Error(`Expected a nonempty native artifact at native/${filename}`);
+  }
+}
 
 console.log(`Ready to publish ${packageJson.name}@${packageJson.version}`);
 console.log(`Native artifacts: ${nativeArtifacts.join(", ")}`);

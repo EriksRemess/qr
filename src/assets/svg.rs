@@ -7,6 +7,8 @@ use super::{RenderError, attributes};
 use crate::render::Color;
 use std::fmt::Write;
 
+const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
+
 #[derive(Clone, Debug)]
 pub struct SvgLogo {
     pub image_uri: String,
@@ -109,9 +111,22 @@ fn tags(input: &str) -> Result<Vec<Tag<'_>>, RenderError> {
                 return Err(RenderError::InvalidSvgLogo);
             }
         } else {
-            attributes(attrs)?;
+            let parsed_attrs = attributes(attrs)?;
             if stack.is_empty() {
-                if saw_root || name != "svg" {
+                let svg_root = match name.split_once(':') {
+                    None => name == "svg",
+                    Some((prefix, "svg")) if !prefix.is_empty() => {
+                        parsed_attrs
+                            .iter()
+                            .find(|(name, _, _)| name.strip_prefix("xmlns:") == Some(prefix))
+                            .map(|(_, value, _)| decode_attribute(value))
+                            .transpose()?
+                            .as_deref()
+                            == Some(SVG_NAMESPACE)
+                    }
+                    _ => false,
+                };
+                if saw_root || !svg_root {
                     return Err(RenderError::InvalidSvgLogo);
                 }
                 saw_root = true;
@@ -171,6 +186,9 @@ impl SvgLogo {
             .map(|(_, value, _)| *value)
             .ok_or(RenderError::InvalidSvgLogo)?;
         let view_box = decode_attribute(view_box)?;
+        if view_box.split(',').any(|group| group.trim().is_empty()) {
+            return Err(RenderError::InvalidSvgLogo);
+        }
         let values = view_box
             .split(|ch: char| ch.is_ascii_whitespace() || ch == ',')
             .filter(|value| !value.is_empty())
@@ -186,18 +204,28 @@ impl SvgLogo {
         {
             return Err(RenderError::InvalidSvgLogo);
         }
-        let mut document = format!(
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\"",
+        let mut document = format!("<{}", root.name);
+        if root.name == "svg" {
+            write!(document, " xmlns=\"{SVG_NAMESPACE}\"").unwrap();
+        } else if !attrs.iter().any(|(name, _, _)| *name == "xmlns") {
+            // Preserve the source's empty default namespace when nesting it in the QR.
+            document.push_str(" xmlns=\"\"");
+        }
+        write!(
+            document,
+            " width=\"{}\" height=\"{}\"",
             values[2], values[3]
-        );
+        )
+        .unwrap();
         let mut root_style = String::new();
         for (name, value, source) in attrs {
-            if name == "xmlns" && decode_attribute(value)? != "http://www.w3.org/2000/svg" {
-                return Err(RenderError::InvalidSvgLogo);
-            }
-            if name == "style" {
+            if name == "xmlns" && root.name == "svg" {
+                if decode_attribute(value)? != SVG_NAMESPACE {
+                    return Err(RenderError::InvalidSvgLogo);
+                }
+            } else if name == "style" {
                 root_style = decode_attribute(value)?;
-            } else if !matches!(name, "xmlns" | "width" | "height" | "x" | "y") {
+            } else if !matches!(name, "width" | "height" | "x" | "y") {
                 document.push(' ');
                 document.push_str(source);
             }
@@ -218,7 +246,7 @@ impl SvgLogo {
             let close = parsed.last().ok_or(RenderError::InvalidSvgLogo)?;
             document.push_str(&input[root.end..close.start]);
         }
-        document.push_str("</svg>");
+        write!(document, "</{}>", root.name).unwrap();
         // A render-time substitution slot that cannot collide with source text.
         let mut outline_marker = "QR_OUTLINE_WIDTH".to_owned();
         while document.contains(&outline_marker)
@@ -258,6 +286,10 @@ impl SvgLogo {
     /// Definition subtrees used for clipping/masking/paint keep their fills.
     pub fn set_outline(&mut self, color: Color, width: f64) -> Result<(), RenderError> {
         if color.alpha == 0 || width == 0.0 {
+            self.inline_outline = None;
+            self.outline_uri = None;
+            self.outline_width = 0.0;
+            self.outline_padding = 0.0;
             return Ok(());
         }
         let mut output = String::with_capacity(self.document.len() * 2);
@@ -345,19 +377,15 @@ impl SvgLogo {
         let parsed = tags(&output)?;
         let root = &parsed[0];
         let root_attributes = attributes(root.attributes)?;
-        let viewport_id = root_attributes
-            .iter()
-            .find(|(name, _, _)| *name == "id")
-            .map(|(_, value, _)| decode_attribute(value))
-            .transpose()?
-            .unwrap_or_else(|| format!("{}-viewport", self.outline_marker));
+        let viewport_id = format!("{}-viewport", self.outline_marker);
+        let prefix = root.name.trim_suffix("svg");
         let mut inner = if inline {
-            "<symbol".to_owned()
+            format!("<{prefix}symbol id=\"{viewport_id}\"")
         } else {
-            format!("<svg x=\"{}\" y=\"{}\"", self.view_x, self.view_y)
+            format!("<{} x=\"{}\" y=\"{}\"", root.name, self.view_x, self.view_y)
         };
         let mut root_style = String::new();
-        let mut presentation = "<g".to_owned();
+        let mut presentation = format!("<{prefix}g");
         for &(name, value, source) in &root_attributes {
             if name == "style" {
                 root_style = decode_attribute(value)?;
@@ -365,7 +393,7 @@ impl SvgLogo {
                 let target = if inline
                     && !matches!(
                         name,
-                        "id" | "xmlns" | "width" | "height" | "viewBox" | "preserveAspectRatio"
+                        "xmlns" | "width" | "height" | "viewBox" | "preserveAspectRatio"
                     )
                     && !name.starts_with("xmlns:")
                 {
@@ -378,23 +406,16 @@ impl SvgLogo {
             }
         }
         if inline {
-            if !root_attributes.iter().any(|(name, _, _)| *name == "id") {
-                write!(inner, " id=\"{}\"", escape_attribute(&viewport_id)).unwrap();
-            }
             let close = parsed.last().ok_or(RenderError::InvalidSvgLogo)?;
             write!(
                 inner,
-                " overflow=\"visible\">{presentation}>{}</g></symbol>",
+                " overflow=\"visible\">{presentation}>{}</{prefix}g></{prefix}symbol>",
                 &output[root.end..close.start]
             )
             .unwrap();
             inner = format!(
-                "<defs>{inner}</defs><use href=\"#{}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"/>",
-                escape_attribute(&viewport_id),
-                self.view_x,
-                self.view_y,
-                self.width,
-                self.height
+                "<defs>{inner}</defs><use href=\"#{viewport_id}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"/>",
+                self.view_x, self.view_y, self.width, self.height
             );
         } else {
             write!(
@@ -462,8 +483,32 @@ fn document_prefix(document: &str, kind: &str) -> String {
     format!("qr-logo-{kind}-{hash:032x}-")
 }
 
-/// Inline normal/outline copies must not share definition IDs. Only URL
-/// references are rewritten, not arbitrary CSS color literals or text.
+fn accepts_css_urls(name: &str) -> bool {
+    matches!(
+        name,
+        "style"
+            | "fill"
+            | "stroke"
+            | "clip-path"
+            | "filter"
+            | "mask"
+            | "mask-image"
+            | "marker"
+            | "marker-start"
+            | "marker-mid"
+            | "marker-end"
+            | "cursor"
+            | "color-profile"
+            | "offset-path"
+            | "shape-inside"
+            | "shape-subtract"
+            | "shape-outside"
+            | "mask-border"
+            | "mask-border-source"
+    )
+}
+
+/// Inline normal and outline copies have separate IDs and local references.
 fn namespace_ids(document: &str, prefix: &str) -> Result<String, RenderError> {
     let parsed = tags(document)?;
     let mut ids = Vec::new();
@@ -490,9 +535,12 @@ fn namespace_ids(document: &str, prefix: &str) -> Result<String, RenderError> {
         }
         let attrs = attributes(tag.attributes)?;
         let mut declarations = Vec::new();
+        let mut animates_css_urls = false;
         for (name, value, _) in &attrs {
             if let Some(prefix) = name.strip_prefix("xmlns:") {
                 declarations.push((prefix, decode_attribute(value)?));
+            } else if *name == "attributeName" {
+                animates_css_urls = accepts_css_urls(&decode_attribute(value)?);
             }
         }
         namespaces.push(declarations);
@@ -511,10 +559,36 @@ fn namespace_ids(document: &str, prefix: &str) -> Result<String, RenderError> {
             let value = decode_attribute(value)?;
             let value = if name == "id" {
                 format!("{prefix}{value}")
-            } else if href && value.starts_with('#') {
-                format!("#{prefix}{}", &value[1..])
-            } else {
+            } else if href && let Some(id) = value.trim_ascii().strip_prefix('#') {
+                format!("#{prefix}{id}")
+            } else if matches!(
+                name,
+                "aria-activedescendant"
+                    | "aria-controls"
+                    | "aria-describedby"
+                    | "aria-details"
+                    | "aria-errormessage"
+                    | "aria-flowto"
+                    | "aria-labelledby"
+                    | "aria-owns"
+            ) {
+                value
+                    .split_ascii_whitespace()
+                    .map(|id| {
+                        if ids.contains(&id) {
+                            format!("{prefix}{id}")
+                        } else {
+                            id.to_owned()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            } else if accepts_css_urls(name)
+                || (animates_css_urls && matches!(name, "from" | "to" | "by" | "values"))
+            {
                 namespace_urls(&value, prefix, &ids)
+            } else {
+                value
             };
             write!(output, " {name}=\"{}\"", escape_attribute(&value)).unwrap();
         }
@@ -538,7 +612,13 @@ fn viewport_style(style: &str, width: f64, height: f64, x: f64, y: f64) -> Strin
 /// geometry or editing CSS. Re-escape edited values when serializing them.
 fn decode_attribute(input: &str) -> Result<String, RenderError> {
     let mut output = String::with_capacity(input.len());
-    let mut remaining = input;
+    let normalized;
+    let mut remaining = if input.contains("\r\n") {
+        normalized = input.replace("\r\n", "\n");
+        &normalized
+    } else {
+        input
+    };
     while let Some(start) = remaining.find('&') {
         output.push_str(&remaining[..start].replace(['\t', '\n', '\r'], " "));
         remaining = &remaining[start + 1..];
@@ -895,6 +975,97 @@ mod tests {
         ] {
             assert!(decode_attribute(invalid).is_err(), "{invalid}");
         }
+    }
+
+    #[test]
+    fn xml_line_endings_are_normalized_before_character_references() {
+        let decoded = decode_attribute("A\r\nB\rC\nD&#13;&#10;E").unwrap();
+        assert_eq!(decoded, "A B C D\r\nE");
+    }
+
+    #[test]
+    fn aria_references_follow_namespaced_logo_ids() {
+        let logo = "<svg viewBox='0 0 2 2' aria-labelledby='title subtitle' aria-describedby='desc'><title id='title'/><desc id='desc'/><text id='subtitle'/></svg>";
+        let output = namespace_ids(logo, "scope-").unwrap();
+        assert!(output.contains("aria-labelledby=\"scope-title scope-subtitle\""));
+        assert!(output.contains("aria-describedby=\"scope-desc\""));
+    }
+
+    #[test]
+    fn local_href_with_surrounding_whitespace_follows_its_target() {
+        let logo = "<svg viewBox='0 0 2 2' xmlns:l='http://www.w3.org/1999/xlink'><path id='shape'/><use href=' #shape '/><use l:href='&#9;#shape&#10;'/></svg>";
+        let output = namespace_ids(logo, "scope-").unwrap();
+        assert_eq!(output.matches("href=\"#scope-shape\"").count(), 2);
+    }
+
+    #[test]
+    fn literal_labels_metadata_and_external_links_preserve_url_looking_text() {
+        let logo = "<svg viewBox='0 0 2 2' xmlns:editor='urn:editor'><path id='paint' aria-label='Use url(#paint)' data-example='url(#paint)' class='url(#paint)' editor:label='url(#paint)'/><a href='other.svg#url(#paint)'/></svg>";
+        let output = namespace_ids(logo, "scope-").unwrap();
+        let values: Vec<_> = tags(&output)
+            .unwrap()
+            .into_iter()
+            .flat_map(|tag| attributes(tag.attributes).unwrap())
+            .filter(|(name, _, _)| {
+                matches!(
+                    *name,
+                    "aria-label" | "data-example" | "class" | "editor:label" | "href"
+                )
+            })
+            .map(|(_, value, _)| decode_attribute(value).unwrap())
+            .collect();
+        assert_eq!(
+            values,
+            [
+                "Use url(#paint)",
+                "url(#paint)",
+                "url(#paint)",
+                "url(#paint)",
+                "other.svg#url(#paint)"
+            ]
+        );
+    }
+
+    #[test]
+    fn animation_values_follow_the_type_of_the_target_attribute() {
+        let logo = "<svg viewBox='0 0 2 2'><path id='paint'><set attributeName='class' to='url(#paint)'/><animate attributeName='f&#105;ll' values='url(#paint);red'/></path></svg>";
+        let output = namespace_ids(logo, "scope-").unwrap();
+        assert!(output.contains("to=\"url(#paint)\""));
+        assert!(output.contains("values=\"url(&quot;#scope-paint&quot;);red\""));
+    }
+
+    #[test]
+    fn disabling_an_existing_outline_restores_the_original_logo() {
+        let original = SvgLogo::parse("<svg viewBox='0 0 10 10'><circle r='4'/></svg>").unwrap();
+        for (color, width) in [
+            (Color::WHITE, 0.0),
+            (
+                Color {
+                    alpha: 0,
+                    ..Color::WHITE
+                },
+                1.0,
+            ),
+        ] {
+            let mut logo = original.clone();
+            logo.set_outline(Color::BLACK, 2.0).unwrap();
+            logo.set_outline(color, width).unwrap();
+            assert_eq!(logo.inline_outline, original.inline_outline);
+            assert_eq!(logo.outline_uri, original.outline_uri);
+            assert_eq!(logo.outline_width, original.outline_width);
+            assert_eq!(logo.outline_padding, original.outline_padding);
+        }
+    }
+
+    #[test]
+    fn view_box_requires_four_numbers_with_valid_separators() {
+        for view_box in [",0 0 10 10", "0,,0 10 10", "0, ,0 10 10", "0 0 10 10,"] {
+            assert!(
+                SvgLogo::parse(&format!("<svg viewBox='{view_box}'/>")).is_err(),
+                "{view_box}"
+            );
+        }
+        assert!(SvgLogo::parse("<svg viewBox=' 0  , 0  10,10 '/>").is_ok());
     }
 
     #[test]

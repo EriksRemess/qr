@@ -895,6 +895,15 @@ test("percent-encoded SVG paint references survive ID namespacing", () => {
   }
 });
 
+test("the inline outline viewport resolves when the source root ID contains a literal percent escape", () => {
+  const logoSvg = '<svg id="logo%41" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>';
+  const svg = new QrRenderer({ logoSvg, svgLogoOutlineColor: "#fff", svgLogoOutlineWidth: 1 }).svg("test");
+  const target = svg.match(/<symbol\b[^>]*\bid="([^"]+)"/u)?.[1];
+  const href = svg.match(/<use href="#([^"]+)"/u)?.[1];
+  assert.ok(target && href);
+  assert.equal(decodeURIComponent(href), target);
+});
+
 test("alternate XLink namespace prefixes preserve SVG logo references", { skip: !hasSvgRasterizer }, () => {
   const logoSvg = '<svg viewBox="0 0 10 10" xmlns:link="http://www.w3.org/1999/xlink">' +
     '<defs><rect id="shape" width="10" height="10" fill="red"/></defs><use link:href="#shape"/></svg>';
@@ -916,4 +925,21 @@ test("namespace-prefixed SVG viewports retain logo outline width", { skip: !hasS
   const expected = render("");
   const actual = render("s:");
   assert.equal(actual.findIndex((value, index) => value !== expected[index]), -1);
+});
+
+test("namespace-qualified SVG roots render the same logo and outline", { skip: !hasSvgRasterizer }, () => {
+  const render = logoSvg => rasterizeSvg(new QrRenderer({
+    logoSvg, logoScale: 0.3, background: "#00f", foreground: "#00f", logoBackground: "#0000",
+    svgLogoOutlineColor: "#fff", svgLogoOutlineWidth: 1,
+  }).svg("test", { size: 200 })).data;
+  const circle = 'cx="5" cy="5" r="4" fill="red"';
+  for (const style of ["", ' style="opacity:1"']) {
+    const expected = render(`<svg viewBox="0 0 10 10"${style}><circle ${circle}/></svg>`);
+    const actual = render(`<s:svg xmlns:s="http://www.w3.org/2000/svg" xmlns="urn:metadata" viewBox="0 0 10 10"${style}>` +
+      `<s:circle ${circle}/><rect width="10" height="10" fill="green"/></s:svg>`);
+    assert.equal(actual.findIndex((byte, i) => byte !== expected[i]), -1);
+  }
+  for (const declaration of ["", 'xmlns:s="urn:metadata"']) {
+    assert.throws(() => new QrRenderer({ logoSvg: `<s:svg ${declaration} viewBox="0 0 10 10"/>` }), /invalid SVG logo/u);
+  }
 });
