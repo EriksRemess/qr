@@ -396,43 +396,36 @@ impl Matrix {
         debug_assert_eq!(bit_index, codewords.len() * 8);
     }
 
-    fn apply_mask(&mut self, mask: u8) {
-        for y in 0..self.size {
-            for x in 0..self.size {
-                let index = self.index(x, y);
-                if !self.function[index] && mask_applies(mask, x, y) {
-                    self.modules[index].toggle();
-                }
-            }
-        }
-    }
-
     fn penalty(&self) -> u32 {
         let mut result = 0_u32;
 
+        let mut runs = [0_u16; MAX_LINE_RUNS];
         for y in 0..self.size {
             result += line_penalty(
                 (0..self.size).map(|x| self.modules[self.index(x, y)]),
                 self.size,
+                &mut runs,
             );
         }
         for x in 0..self.size {
             result += line_penalty(
                 (0..self.size).map(|y| self.modules[self.index(x, y)]),
                 self.size,
+                &mut runs,
             );
         }
 
-        for y in 0..self.size - 1 {
-            for x in 0..self.size - 1 {
-                let color = self.modules[self.index(x, y)];
-                if self.modules[self.index(x + 1, y)] == color
-                    && self.modules[self.index(x, y + 1)] == color
-                    && self.modules[self.index(x + 1, y + 1)] == color
-                {
-                    result += 3;
-                }
-            }
+        for (top, bottom) in self
+            .modules
+            .chunks_exact(self.size)
+            .zip(self.modules[self.size..].chunks_exact(self.size))
+        {
+            let squares: u32 = top
+                .array_windows::<2>()
+                .zip(bottom.array_windows::<2>())
+                .map(|(&[a, b], &[c, d])| u32::from((a == b) & (a == c) & (a == d)))
+                .sum();
+            result += 3 * squares;
         }
 
         let dark = self.modules.iter().filter(|module| **module).count();
@@ -448,19 +441,39 @@ fn build_symbol(codewords: &[u8], version: u8, level: EcLevel) -> Symbol {
     matrix.draw_patterns(version, level);
     matrix.place_codewords(codewords);
 
+    // Each byte holds the final module color for all eight candidate masks.
+    let mut candidates = Vec::with_capacity(matrix.modules.len());
+    for (y, (row, fixed)) in matrix
+        .modules
+        .chunks_exact(matrix.size)
+        .zip(matrix.function.chunks_exact(matrix.size))
+        .enumerate()
+    {
+        for ((&dark, &fixed), &pattern) in
+            row.iter().zip(fixed).zip(MASK_BITS[y % 12].iter().cycle())
+        {
+            let flips = if fixed { 0 } else { pattern };
+            candidates.push(if dark { !flips } else { flips });
+        }
+    }
+    let apply = |modules: &mut [bool], mask: u8| {
+        let bit = 1_u8 << mask;
+        for (dest, &colors) in modules.iter_mut().zip(&candidates) {
+            *dest = colors & bit != 0;
+        }
+    };
     let mut best_mask = 0;
     let mut best_penalty = u32::MAX;
     for mask in 0..8 {
-        matrix.apply_mask(mask);
+        apply(&mut matrix.modules, mask);
         matrix.draw_format(level, mask);
         let penalty = matrix.penalty();
         if penalty < best_penalty {
             best_penalty = penalty;
             best_mask = mask;
         }
-        matrix.apply_mask(mask);
     }
-    matrix.apply_mask(best_mask);
+    apply(&mut matrix.modules, best_mask);
     matrix.draw_format(level, best_mask);
 
     Symbol {
@@ -489,7 +502,28 @@ fn alignment_positions(version: u8) -> Vec<usize> {
     result
 }
 
-fn mask_applies(mask: u8, x: usize, y: usize) -> bool {
+// All eight mask formulas repeat every six columns and twelve rows.
+const MASK_BITS: [[u8; 6]; 12] = {
+    let mut tile = [[0; 6]; 12];
+    let mut y = 0;
+    while y < 12 {
+        let mut x = 0;
+        while x < 6 {
+            let mut mask = 0;
+            while mask < 8 {
+                if mask_applies(mask, x, y) {
+                    tile[y][x] |= 1 << mask;
+                }
+                mask += 1;
+            }
+            x += 1;
+        }
+        y += 1;
+    }
+    tile
+};
+
+const fn mask_applies(mask: u8, x: usize, y: usize) -> bool {
     match mask {
         0 => (x + y).is_multiple_of(2),
         1 => y.is_multiple_of(2),
@@ -499,80 +533,60 @@ fn mask_applies(mask: u8, x: usize, y: usize) -> bool {
         5 => (x * y % 2 + x * y % 3) == 0,
         6 => (x * y % 2 + x * y % 3).is_multiple_of(2),
         7 => ((x + y) % 2 + x * y % 3).is_multiple_of(2),
-        _ => unreachable!("mask is constrained to 0 through 7"),
+        _ => panic!("invalid mask"),
     }
 }
 
-fn line_penalty(line: impl Iterator<Item = bool>, size: usize) -> u32 {
-    let mut color = false;
-    let mut length = 0_usize;
-    let mut history = FinderPenalty::new(size);
-    let mut result = 0_u32;
+// Version 40 has 177 modules per side. A line can also begin and end with
+// an empty light run for the quiet area outside the matrix.
+const MAX_LINE_RUNS: usize = 177 + 2;
 
-    for module in line {
-        if module == color {
-            length += 1;
-            if length == 5 {
-                result += 3;
-            } else if length > 5 {
-                result += 1;
-            }
-        } else {
-            history.add(length);
-            if !color {
-                result += history.pattern_count() * 40;
-            }
-            color = module;
-            length = 1;
-        }
-    }
-
-    result + history.terminate_and_count(color, length) * 40
-}
-
-/// Run history used by QR penalty rule N3.
-///
-/// Counting runs instead of matching a fixed 11-module bitmap matters because
-/// the 1:1:3:1:1 finder-like ratio can occur at any integer scale. The quiet
-/// area outside the symbol is modeled as a light run one symbol-width long.
-struct FinderPenalty {
+fn line_penalty(
+    line: impl Iterator<Item = bool>,
     size: usize,
-    runs: [usize; 7],
-}
-
-impl FinderPenalty {
-    fn new(size: usize) -> Self {
-        Self { size, runs: [0; 7] }
+    runs: &mut [u16; MAX_LINE_RUNS],
+) -> u32 {
+    let mut previous = false;
+    let mut start = 0;
+    let mut count = 0;
+    for (index, color) in line.enumerate() {
+        let index = index as u16;
+        // A color change commits this run. Otherwise its slot is reused.
+        runs[count] = index - start;
+        let changed = previous != color;
+        start = if changed { index } else { start };
+        count += usize::from(changed);
+        previous = color;
     }
-
-    fn add(&mut self, mut length: usize) {
-        if self.runs[0] == 0 {
-            length += self.size;
+    runs[count] = size as u16 - start;
+    count += 1;
+    if previous {
+        runs[count] = 0;
+        count += 1;
+    }
+    let runs = &mut runs[..count];
+    let mut score: u32 = runs
+        .iter()
+        .map(|&length| {
+            if length >= 5 {
+                u32::from(length) - 2
+            } else {
+                0
+            }
+        })
+        .sum();
+    // N3 includes the quiet area and accepts the finder ratio at any scale.
+    runs[0] += size as u16;
+    runs[count - 1] += size as u16;
+    for window in runs.array_windows::<7>().step_by(2) {
+        let &[left, unit, gap1, center, gap2, end, right] = window;
+        if gap1 == unit && gap2 == unit && end == unit && center == unit * 3 {
+            score += 40
+                * (u32::from(left >= 4 * unit && right >= unit)
+                    + u32::from(right >= 4 * unit && left >= unit));
         }
-        self.runs.copy_within(..6, 1);
-        self.runs[0] = length;
     }
-
-    fn pattern_count(&self) -> u32 {
-        let unit = self.runs[1];
-        let core = unit > 0
-            && self.runs[2] == unit
-            && self.runs[3] == unit * 3
-            && self.runs[4] == unit
-            && self.runs[5] == unit;
-        u32::from(core && self.runs[0] >= unit * 4 && self.runs[6] >= unit)
-            + u32::from(core && self.runs[6] >= unit * 4 && self.runs[0] >= unit)
-    }
-
-    fn terminate_and_count(mut self, color: bool, mut length: usize) -> u32 {
-        if color {
-            self.add(length);
-            length = 0;
-        }
-        length += self.size;
-        self.add(length);
-        self.pattern_count()
-    }
+    score
 }
 
 // Tables from ISO/IEC 18004. Index zero is unused so the QR version can be
@@ -619,6 +633,17 @@ const NUM_ERROR_CORRECTION_BLOCKS: [[u8; 41]; 4] = [
 mod tests {
     use super::*;
     use qrcodegen::{QrCode, QrCodeEcc, QrSegment, Version};
+
+    #[test]
+    fn line_scores_include_scaled_finders_and_both_quiet_borders() {
+        let mut runs = [0; MAX_LINE_RUNS];
+        let mut score =
+            |bits: &[u8]| line_penalty(bits.iter().map(|&bit| bit == b'1'), bits.len(), &mut runs);
+        assert_eq!(score(b"11001111110011"), 84);
+        assert_eq!(score(b"11111"), 3);
+        let alternating: [u8; 177] = std::array::from_fn(|i| if i % 2 == 0 { b'1' } else { b'0' });
+        assert_eq!(score(&alternating), 0);
+    }
 
     #[test]
     fn finite_field_multiplication_matches_reference_values() {

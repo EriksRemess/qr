@@ -20,12 +20,12 @@ enum Segment {
     Arc {
         end: Point,
         center: Point,
-        radius: f64,
         clockwise: bool,
     },
 }
 
 struct Contour {
+    radius: f64,
     start: Point,
     segments: Vec<Segment>,
 }
@@ -158,6 +158,8 @@ impl RoundedGeometry {
     pub fn svg_path(&self) -> String {
         let mut output = String::new();
         for contour in &self.contours {
+            let radius = contour.radius;
+            let arc = format!("A{radius} {radius} 0 0 ");
             output.push('M');
             write_point(&mut output, contour.start);
             for segment in &contour.segments {
@@ -166,13 +168,9 @@ impl RoundedGeometry {
                         output.push('L');
                         write_point(&mut output, *end);
                     }
-                    Segment::Arc {
-                        end,
-                        radius,
-                        clockwise,
-                        ..
-                    } => {
-                        write!(output, "A{radius} {radius} 0 0 {} ", u8::from(*clockwise)).unwrap();
+                    Segment::Arc { end, clockwise, .. } => {
+                        output.push_str(&arc);
+                        output.push_str(if *clockwise { "1 " } else { "0 " });
                         write_point(&mut output, *end);
                     }
                 }
@@ -200,7 +198,8 @@ impl RoundedGeometry {
                         maximum: start.y.max(end.y) * scale,
                         curve: match segment {
                             Segment::Line(_) => Curve::Vertical(start.x * scale),
-                            Segment::Arc { center, radius, .. } => {
+                            Segment::Arc { center, .. } => {
+                                let radius = contour.radius;
                                 let key = (
                                     (center.y * 100.0).round() as i32,
                                     (radius * 100.0).round() as i32,
@@ -337,13 +336,16 @@ fn rounded_contour(corners: &[Point], radius: f64) -> Contour {
                 x: entry.x + outgoing.x * radius,
                 y: entry.y + outgoing.y * radius,
             },
-            radius,
             clockwise: incoming.x * outgoing.y - incoming.y * outgoing.x > 0.0,
         });
     }
     let start = first.expect("a module boundary has corners");
     segments.push(Segment::Line(start));
-    Contour { start, segments }
+    Contour {
+        radius,
+        start,
+        segments,
+    }
 }
 
 enum Curve {
@@ -391,6 +393,16 @@ pub(super) struct RoundedRaster {
 }
 
 impl RoundedRaster {
+    pub fn repeats_previous_row(&self, y: usize) -> bool {
+        y > 0
+            && self.row_kernels[y].is_empty()
+            && self.rows[y] == self.rows[y - 1]
+            && self.rows[y].iter().all(|&index| {
+                let edge = &self.edges[index];
+                edge.minimum <= (y - 1) as f64 && edge.maximum >= (y + 1) as f64
+            })
+    }
+
     /// Eight vertical samples with exact horizontal interval coverage. Long
     /// solid spans use a difference array instead of touching every pixel for
     /// every sample. Circles are evaluated analytically, without a tessellator.

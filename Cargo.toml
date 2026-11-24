@@ -1,6 +1,6 @@
 [package]
 name = "qr_native"
-version = "0.2.0"
+version = "0.2.2"
 edition = "2024"
 rust-version = "1.100"
 license = "MIT"
@@ -18,12 +18,12 @@ codegen-units = 1
 lto = "thin"
 
 [dependencies]
-napi = { version = "3.13.0", default-features = false, features = ["napi10"] }
-napi-derive = "3.6.9"
-zlib-rs = { version = "0.6.8", default-features = false, features = ["std"] }
+napi = { version = "3.16.3", default-features = false, features = ["napi10"] }
+napi-derive = "3.7.2"
+zlib-rs = { version = "0.6.9", default-features = false, features = ["std"] }
 
 [build-dependencies]
-napi-build = "2.5.0"
+napi-build = "2.7.0"
 
 [dev-dependencies]
 qrcodegen = "1.8.0"

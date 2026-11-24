@@ -36,7 +36,11 @@ pub fn render_svg(symbol: &Symbol, style: &Style, size: u32, logo: Option<&SvgLo
         RoundedGeometry::new(symbol, margin, size as usize).svg_path()
     } else {
         let mut square_path = String::with_capacity(symbol.modules.len() * 2);
-        for y in 0..symbol.size {
+        let positions: Vec<_> = (0..symbol.size)
+            .map(|index| (index + margin).to_string())
+            .collect();
+        let lengths: Vec<_> = (0..=symbol.size).map(|length| length.to_string()).collect();
+        for (y, top) in positions.iter().enumerate() {
             let mut x = 0;
             while x < symbol.size {
                 if !symbol.module(x, y) {
@@ -48,15 +52,16 @@ pub fn render_svg(symbol: &Symbol, style: &Style, size: u32, logo: Option<&SvgLo
                 while x < symbol.size && symbol.module(x, y) {
                     x += 1;
                 }
-                write!(
-                    square_path,
-                    "M{} {}h{}v1H{}z",
-                    start + margin,
-                    y + margin,
-                    x - start,
-                    start + margin
-                )
-                .expect("writing to a String cannot fail");
+                let left = &positions[start];
+                square_path.push('M');
+                square_path.push_str(left);
+                square_path.push(' ');
+                square_path.push_str(top);
+                square_path.push('h');
+                square_path.push_str(&lengths[x - start]);
+                square_path.push_str("v1H");
+                square_path.push_str(left);
+                square_path.push('z');
             }
         }
         square_path

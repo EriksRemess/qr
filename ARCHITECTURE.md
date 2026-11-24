@@ -45,9 +45,9 @@ scanline coverage, sharing circular evaluations and solid-span work. The
 encoded module matrix and logo layout are unchanged.
 
 PNG output is non-interlaced, 8-bit RGBA with IHDR, IDAT, and IEND chunks.
-Scanlines use the Sub filter and zlib's RLE strategy. Filtered rows are cached
-by module row except where a logo needs per-pixel compositing. CRC-32 and
-compression use `zlib-rs`.
+The renderer writes Sub-filtered differences at color transitions. Repeated
+scanlines outside a logo use the Up filter with an all-zero payload. Logo rows
+are composited per pixel. CRC-32 and RLE compression use `zlib-rs`.
 
 Both formats composite foreground over background with source-over alpha.
 They share pixel-aligned logo placement and a rectangular backing with

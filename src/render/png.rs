@@ -10,10 +10,8 @@ const SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
 
 /// Render an 8-bit RGBA, non-interlaced PNG.
 ///
-/// Rasterization and compression happen exactly once. Scanlines use the Sub
-/// filter because QR images contain long same-color runs; the zlib RLE strategy
-/// is selected for the same reason. Both choices are benchmarked rather than
-/// treated as permanent format requirements.
+/// Sub filtering leaves nonzero bytes at color transitions. Identical rows
+/// use the Up filter so that their entire payload is zero for RLE compression.
 pub fn render_png(
     symbol: &Symbol,
     style: &Style,
@@ -40,90 +38,82 @@ pub fn render_png(
         .ok_or(RenderError::InvalidSize(size as u32))?;
     let mut filtered = vec![0_u8; scanline_bytes];
     let logo = logo.map(|logo| LogoPlacement::new(logo, style, size, total_modules));
-    let mut square_row_cache: Vec<Option<Vec<u8>>> = vec![None; total_modules];
-    let mut rounded = (style.module_style == ModuleStyle::Rounded).then(|| {
-        RoundedGeometry::new(symbol, style.margin as usize, size).raster(size, total_modules)
-    });
-    let mut coverage = if rounded.is_some() {
-        vec![0_u8; size]
-    } else {
-        Vec::new()
-    };
-    let mut previous_coverage = coverage.clone();
-    let mut previous_row_cacheable = false;
-    // Match SVG's foreground-over-background compositing, once per render
-    // rather than once per pixel.
     let background = Pixel::from_color(style.background);
     let foreground = Pixel::from_color(style.foreground).over(background);
-    // Rounded antialiasing has only 256 coverage values. Blend each value once
-    // instead of repeating alpha multiplication and channel division per edge
-    // pixel. Square rendering does not construct this table.
-    let coverage_colors: Option<[Pixel; 256]> = rounded.as_ref().map(|_| {
-        std::array::from_fn(|coverage| {
+    let mut rounded = (style.module_style == ModuleStyle::Rounded).then(|| {
+        let raster =
+            RoundedGeometry::new(symbol, style.margin as usize, size).raster(size, total_modules);
+        let colors: [Pixel; 256] = std::array::from_fn(|coverage| {
             let mut source = Pixel::from_color(style.foreground);
             source.alpha = ((u16::from(source.alpha) * coverage as u16 + 127) / 255) as u8;
             source.over(background)
-        })
+        });
+        (raster, colors, vec![0_u8; size], vec![0_u8; size])
     });
+    let mut previous_without_logo = false;
+    let mut previous_module_y = 0;
 
-    for y in 0..size {
-        let row_start = y * (row_bytes + 1);
+    for (y, row) in filtered.chunks_exact_mut(row_bytes + 1).enumerate() {
         let module_y = symbol_coordinate(y, size, total_modules);
-        let outside_logo = logo
+        let row_logo = logo
             .as_ref()
-            .is_none_or(|placement| y < placement.backing_y || y >= placement.backing_bottom);
-        let cacheable = rounded.is_none() && outside_logo;
-        if cacheable && let Some(cached) = &square_row_cache[module_y] {
-            filtered[row_start..row_start + row_bytes + 1].copy_from_slice(cached);
+            .filter(|placement| (placement.backing_y..placement.backing_bottom).contains(&y));
+        let (rounded_row, repeated) =
+            if let Some((raster, colors, coverage, previous)) = &mut rounded {
+                let repeated = if raster.repeats_previous_row(y) {
+                    true
+                } else {
+                    std::mem::swap(coverage, previous);
+                    raster.row(y, coverage);
+                    coverage == previous
+                };
+                (Some((&colors[..], &coverage[..])), repeated)
+            } else {
+                (None, previous_module_y == module_y)
+            };
+        let copy_previous = repeated && previous_without_logo && row_logo.is_none();
+        previous_without_logo = row_logo.is_none();
+        previous_module_y = module_y;
+        if copy_previous {
+            // The buffer is zero-initialized. Up reconstructs the preceding row.
+            row[0] = 2;
             continue;
         }
 
-        if let Some(raster) = &mut rounded {
-            raster.row(y, &mut coverage);
-            // Straight sections of rounded contours still produce identical
-            // scanlines. Sub filtering is row-independent, so reuse the whole
-            // filtered row when coverage matches and no logo intersects it.
-            if outside_logo && previous_row_cacheable && coverage == previous_coverage {
-                let (previous, current) = filtered.split_at_mut(row_start);
-                current[..row_bytes + 1]
-                    .copy_from_slice(&previous[row_start - row_bytes - 1..row_start]);
-                continue;
-            }
-            previous_coverage.copy_from_slice(&coverage);
-            previous_row_cacheable = outside_logo;
-        }
-
-        filtered[row_start] = 1; // PNG Sub filter.
+        row[0] = 1;
+        let samples = row[1..].as_chunks_mut::<4>().0;
         let mut left = [0_u8; 4];
-        for x in 0..size {
-            // Rounded coverage already identifies the pixel's foreground.
-            // Avoid a variable integer division per pixel on this path.
-            let module_x = if rounded.is_some() {
-                0
+        let square_color = |module_x| {
+            if is_dark_at(symbol, style, module_x, module_y) {
+                foreground
             } else {
-                symbol_coordinate(x, size, total_modules)
-            };
-            let color = pixel_color(
-                symbol,
-                style,
-                (x, y),
-                (module_x, module_y),
-                (foreground, background),
-                coverage_colors
-                    .as_ref()
-                    .map(|colors| colors[coverage[x] as usize]),
-                logo.as_ref(),
-            );
-            let rgba = [color.red, color.green, color.blue, color.alpha];
-            for channel in 0..channels {
-                filtered[row_start + 1 + x * channels + channel] =
-                    rgba[channel].wrapping_sub(left[channel]);
+                background
             }
-            left = rgba;
-        }
-        if cacheable {
-            square_row_cache[module_y] =
-                Some(filtered[row_start..row_start + row_bytes + 1].to_vec());
+        };
+        if let Some(logo) = row_logo {
+            for (x, sample) in samples.iter_mut().enumerate() {
+                let base = match rounded_row {
+                    Some((colors, coverage)) => colors[coverage[x] as usize],
+                    None => square_color(symbol_coordinate(x, size, total_modules)),
+                };
+                logo.composite(x, y, base).write_sub(sample, &mut left);
+            }
+        } else if let Some((colors, coverage)) = rounded_row {
+            let mut last_coverage = None;
+            for (sample, &value) in samples.iter_mut().zip(coverage) {
+                if last_coverage != Some(value) {
+                    colors[value as usize].write_sub(sample, &mut left);
+                    last_coverage = Some(value);
+                }
+            }
+        } else {
+            for module_x in 0..total_modules {
+                let pixel = square_color(module_x);
+                if pixel.channels() != left {
+                    let x = (module_x * size).div_ceil(total_modules);
+                    pixel.write_sub(&mut samples[x], &mut left);
+                }
+            }
         }
     }
 
@@ -161,6 +151,18 @@ struct Pixel {
 }
 
 impl Pixel {
+    fn channels(self) -> [u8; 4] {
+        [self.red, self.green, self.blue, self.alpha]
+    }
+
+    fn write_sub(self, destination: &mut [u8; 4], left: &mut [u8; 4]) {
+        let rgba = self.channels();
+        for i in 0..4 {
+            destination[i] = rgba[i].wrapping_sub(left[i]);
+        }
+        *left = rgba;
+    }
+
     fn from_color(color: super::Color) -> Self {
         Self {
             red: color.red,
@@ -328,27 +330,6 @@ fn sampling_axis(source_length: usize, target_length: usize) -> Vec<AxisSample> 
             upper,
             upper_weight: ((position - lower as f64) * 256.0).round() as u16,
         }
-    })
-}
-
-fn pixel_color(
-    symbol: &Symbol,
-    style: &Style,
-    pixel: (usize, usize),
-    module: (usize, usize),
-    colors: (Pixel, Pixel),
-    coverage: Option<Pixel>,
-    logo: Option<&LogoPlacement<'_>>,
-) -> Pixel {
-    let (pixel_x, pixel_y) = pixel;
-    let (module_x, module_y) = module;
-    let pixel = match coverage {
-        Some(pixel) => pixel,
-        None if is_dark_at(symbol, style, module_x, module_y) => colors.0,
-        None => colors.1,
-    };
-    logo.map_or(pixel, |placement| {
-        placement.composite(pixel_x, pixel_y, pixel)
     })
 }
 
