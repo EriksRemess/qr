@@ -60,6 +60,16 @@ pixels. Size must be an integer from 21 to 4096. PNG also requires at least one
 pixel per QR module, including the margin. Invalid options and oversized payloads
 throw errors.
 
+Output options accept `captionLines` for up to two lines of 256 characters each.
+Captions add space below the square QR symbol. Both formats use the bundled
+M PLUS 1p Regular glyphs and require no installed fonts. For example,
+`qr.png(url, { size: 1024, captionLines: ["Lunch menu", "example.org/menu"] })`.
+The font covers Latin and Japanese text. See [its license](./fonts/OFL.txt).
+
+For a two-color PNG logo, `pngLogoPalette` accepts opaque `sourceForeground`,
+`sourceBackground`, `foreground` and `background` colors. It only recolors the
+embedded bitmap. SVG artwork accepts colors in its own paint attributes.
+
 ## Logos
 
 Supply each format separately; SVG logos are not converted to PNG automatically.

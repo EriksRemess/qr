@@ -103,5 +103,5 @@ The JavaScript loader selects a native artifact for a
 [supported platform](./NATIVE-BUILDS.md); unsupported platforms fail without a
 fallback renderer.
 
-Runtime Rust dependencies are the Node-API bridge (`napi`/`napi-derive`) and
-`zlib-rs`. There are no runtime npm dependencies.
+The native library uses `napi` and `napi-derive` for the Node-API bridge,
+`zlib-rs` for compression and `ab_glyph` for caption outlines and rasterization.

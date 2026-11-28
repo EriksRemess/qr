@@ -943,3 +943,66 @@ test("namespace-qualified SVG roots render the same logo and outline", { skip: !
     assert.throws(() => new QrRenderer({ logoSvg: `<s:svg ${declaration} viewBox="0 0 10 10"/>` }), /invalid SVG logo/u);
   }
 });
+
+test("caption lines preserve the symbol and render visible text on transparent paper", () => {
+  const renderer = new QrRenderer({ foreground: "#123456", background: "#ffffff00" });
+  const text = "https://example.org/menu";
+  const opts = { size: 256, captionLines: ["Rīga <日本> &", "example.org/menu"] };
+  const plain = decodeRgbaPng(renderer.png(text, { size: opts.size }));
+  const png = decodeRgbaPng(renderer.png(text, opts));
+  assert.equal(png.width, plain.width);
+  assert.equal(png.height, 295);
+  assert.deepEqual(png.data.subarray(0, plain.data.length), plain.data);
+  for (const row of [256, 274]) {
+    const part = png.data.subarray(row * 256 * 4, (row + 16) * 256 * 4);
+    assert.ok(part.some((value, i) => i % 4 === 3 && value > 128));
+    assert.equal(part[3], 0);
+  }
+  const svg = renderer.svg(text, opts);
+  assert.match(svg, /width="256" height="295"/u);
+  assert.match(svg, /Rīga &lt;日本&gt; &amp;/u);
+  assert.ok(!svg.includes("<text"));
+  if (hasSvgRasterizer) {
+    const raster = rasterizeSvg(svg);
+    assert.equal(raster.height, png.height);
+    const footer = raster.data.subarray(plain.data.length);
+    assert.ok(footer.some((value, i) => i % 4 === 3 && value > 128));
+  }
+});
+
+test("both formats reject out-of-contract captions and omit empty lines", () => {
+  const renderer = new QrRenderer();
+  for (const format of ["png", "svg"]) {
+    assert.deepEqual(renderer[format]("abc", { captionLines: ["", ""] }), renderer[format]("abc"));
+    for (const lines of [["one", "two", "three"], ["x".repeat(257)], ["menu\nopen"], ["\uffff"]]) {
+      assert.throws(() => renderer[format]("abc", { captionLines: lines }), /captionLines/u);
+    }
+  }
+});
+
+test("a PNG logo palette remaps embedded pixels independently of the symbol colors", () => {
+  const palette = { sourceForeground: "#2563eb", sourceBackground: "#ffffff", foreground: "#aaff00", background: "#001122" };
+  const logoPng = createLogoPng();
+  const renderer = new QrRenderer({ foreground: "#000000", logoPng, pngLogoPalette: palette });
+  const { data, width } = decodeRgbaPng(renderer.png("menu", { size: 256 }));
+  const center = (128 * width + 128) * 4;
+  assert.deepEqual([...data.slice(center, center + 4)], [170, 255, 0, 255]);
+  const plain = decodeRgbaPng(new QrRenderer({ logoPng }).png("menu", { size: 256 }));
+  assert.deepEqual([...plain.data.slice(center, center + 4)], [37, 99, 235, 255]);
+  for (const change of [{ sourceBackground: palette.sourceForeground }, { foreground: "#fedcba80" }]) {
+    assert.throws(() => new QrRenderer({ logoPng, pngLogoPalette: { ...palette, ...change } }), /pngLogoPalette/u);
+  }
+});
+
+test("a captioned SVG keeps a continuous background at fractional display sizes", { skip: !hasSvgRasterizer }, () => {
+  const qr = new QrRenderer({ background: "#00000080", foreground: "#393543" });
+  const svg = qr.svg("https://ej.uz/oanh", { size: 512, captionLines: ["ej.uz/oanh"] });
+  const { data, width } = rasterizeSvg(`<svg xmlns="http://www.w3.org/2000/svg" width="662" height="715"
+    viewBox="0 0 512 554" preserveAspectRatio="none">${svg}</svg>`);
+  const seam = 512 * 715 / 554;
+  for (let y = Math.floor(seam) - 1; y <= Math.ceil(seam) + 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      assert.equal(data[(y * width + x) * 4 + 3], 128);
+    }
+  }
+});

@@ -15,6 +15,8 @@ export interface RendererOptions {
   logoSvg?: string;
   /** Non-interlaced 8-bit RGB/RGBA PNG (RGB tRNS supported), for PNG output only. */
   logoPng?: Buffer;
+  /** Recolor a two-tone PNG logo, preserving antialiasing and alpha. All four colors must be opaque. */
+  pngLogoPalette?: { sourceForeground: string; sourceBackground: string; foreground: string; background: string };
   /** Maximum logo width/height as a fraction of output size. Defaults to 1/3. */
   logoScale?: number;
   /** Square backing padding in QR modules, rounded up to pixels. Defaults to 0.35. */
@@ -28,7 +30,9 @@ export interface RendererOptions {
 }
 
 export interface OutputOptions {
-  /** Exact output width and height in pixels. Defaults to 512. */
+  /** Optional lines below the symbol, using the bundled M PLUS 1p font. */
+  captionLines?: string[];
+  /** Width of the square QR symbol in pixels. Captions add height. Defaults to 512. */
   size?: number;
 }
 

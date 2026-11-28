@@ -18,7 +18,18 @@ pub fn render_png(
     size: u32,
     logo: Option<&PngLogo>,
 ) -> Result<Vec<u8>, RenderError> {
+    render_png_with_caption(symbol, style, size, logo, None)
+}
+
+pub(crate) fn render_png_with_caption(
+    symbol: &Symbol,
+    style: &Style,
+    size: u32,
+    logo: Option<&PngLogo>,
+    caption: Option<&super::caption::Caption>,
+) -> Result<Vec<u8>, RenderError> {
     let size = validate_size(size)?;
+    let height = size + caption.map_or(0, |caption| caption.height);
     let total_modules = symbol.size + style.margin as usize * 2;
     if size < total_modules {
         return Err(RenderError::OutputTooSmall {
@@ -34,7 +45,7 @@ pub fn render_png(
         .ok_or(RenderError::InvalidSize(size as u32))?;
     let scanline_bytes = row_bytes
         .checked_add(1)
-        .and_then(|value| value.checked_mul(size))
+        .and_then(|value| value.checked_mul(height))
         .ok_or(RenderError::InvalidSize(size as u32))?;
     let mut filtered = vec![0_u8; scanline_bytes];
     let logo = logo.map(|logo| LogoPlacement::new(logo, style, size, total_modules));
@@ -53,7 +64,11 @@ pub fn render_png(
     let mut previous_without_logo = false;
     let mut previous_module_y = 0;
 
-    for (y, row) in filtered.chunks_exact_mut(row_bytes + 1).enumerate() {
+    for (y, row) in filtered
+        .chunks_exact_mut(row_bytes + 1)
+        .take(size)
+        .enumerate()
+    {
         let module_y = symbol_coordinate(y, size, total_modules);
         let row_logo = logo
             .as_ref()
@@ -117,6 +132,22 @@ pub fn render_png(
         }
     }
 
+    if let Some(caption) = caption {
+        let mask = caption.coverage(size);
+        let tail = &mut filtered[size * (row_bytes + 1)..];
+        for (row, alphas) in tail
+            .chunks_exact_mut(row_bytes + 1)
+            .zip(mask.chunks_exact(size))
+        {
+            row[0] = 1;
+            let mut left = [0; 4];
+            for (sample, alpha) in row[1..].as_chunks_mut::<4>().0.iter_mut().zip(alphas) {
+                let mut ink = Pixel::from_color(style.foreground);
+                ink.alpha = ((u16::from(ink.alpha) * u16::from(*alpha) + 127) / 255) as u8;
+                ink.over(background).write_sub(sample, &mut left);
+            }
+        }
+    }
     let mut config = DeflateConfig::best_speed();
     config.strategy = Strategy::Rle;
     let mut compressed = vec![0_u8; compress_bound(filtered.len())];
@@ -133,7 +164,7 @@ pub fn render_png(
     output.extend_from_slice(SIGNATURE);
     let mut header = [0_u8; 13];
     header[0..4].copy_from_slice(&(size as u32).to_be_bytes());
-    header[4..8].copy_from_slice(&(size as u32).to_be_bytes());
+    header[4..8].copy_from_slice(&(height as u32).to_be_bytes());
     header[8] = 8; // Bit depth.
     header[9] = 6; // RGBA.
     pack_chunk(&mut output, b"IHDR", &header);

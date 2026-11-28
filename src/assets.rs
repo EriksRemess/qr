@@ -5,7 +5,7 @@
 //! intentionally limited to the static logo format needed by this package; it
 //! is not a general replacement for an image library.
 
-use crate::render::RenderError;
+use crate::render::{Color, RenderError};
 use zlib_rs::{InflateConfig, ReturnCode, crc32::crc32, decompress_slice};
 
 const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
@@ -24,6 +24,35 @@ pub struct PngLogo {
 }
 
 impl PngLogo {
+    /// Project antialiased source pixels onto the original two-color ramp.
+    /// Preserve the alpha mask and interpolate only the three color channels.
+    pub(crate) fn recolor(&mut self, source_fg: Color, source_bg: Color, fg: Color, bg: Color) {
+        let channels = |color: Color| {
+            [
+                f32::from(color.red),
+                f32::from(color.green),
+                f32::from(color.blue),
+            ]
+        };
+        let (start, end, from, to) = (
+            channels(source_bg),
+            channels(source_fg),
+            channels(bg),
+            channels(fg),
+        );
+        let delta: [f32; 3] = std::array::from_fn(|i| end[i] - start[i]);
+        let length: f32 = delta.iter().map(|v| v * v).sum();
+        for pixel in self.rgba.as_chunks_mut::<4>().0 {
+            let position: f32 = (0..3)
+                .map(|i| (f32::from(pixel[i]) - start[i]) * delta[i])
+                .sum();
+            let t = (position / length).clamp(0.0, 1.0);
+            for i in 0..3 {
+                pixel[i] = (from[i] + t * (to[i] - from[i])).round() as u8;
+            }
+        }
+    }
+
     /// Decode an 8-bit, non-interlaced RGB or RGBA PNG.
     pub fn decode(input: &[u8]) -> Result<Self, RenderError> {
         if input.len() < PNG_SIGNATURE.len() || &input[..8] != PNG_SIGNATURE {

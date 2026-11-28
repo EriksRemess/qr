@@ -1,6 +1,6 @@
 {
   "name": "@eriksremess/qr",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Fast, customizable QR rendering for modern Node.js",
   "type": "module",
   "repository": {
@@ -20,7 +20,8 @@
   "files": [
     "index.js",
     "index.d.ts",
-    "native/*.node"
+    "native/*.node",
+    "fonts/OFL.txt"
   ],
   "scripts": {
     "build:native": "node scripts/copy-native.js",

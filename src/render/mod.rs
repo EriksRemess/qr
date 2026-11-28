@@ -1,5 +1,6 @@
 //! Format-independent styling and concrete SVG/PNG renderers.
 
+pub(crate) mod caption;
 mod png;
 mod rounded;
 mod svg;
@@ -8,6 +9,7 @@ use crate::core::{EcLevel, Symbol};
 use std::fmt;
 
 pub use png::render_png;
+pub(crate) use png::render_png_with_caption;
 pub use svg::render_svg;
 
 pub const DEFAULT_SIZE: u32 = 512;
